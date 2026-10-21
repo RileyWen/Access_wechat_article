@@ -3,7 +3,7 @@
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
-from lxml import html
+from lxml import etree, html
 
 from src.services.archive.reader_resources import article_body, image_ok
 
@@ -47,17 +47,18 @@ def offline_cache_state(root: Path, manifest: dict) -> tuple[str, int, int, str]
                 continue
             reference(node.get("src") or node.get("data-src"), image=node.tag == "img")
             reference(node.get("poster"), image=True)
-    except (OSError, ValueError, TypeError):
+    except (OSError, ValueError, TypeError, etree.LxmlError):
         invalid.add("正文结构")
     for key, path in resources.items():
         if path is None or not path.is_file() or not path.stat().st_size:
             invalid.add(key)
         elif key in images:
             if path.suffix.lower() == ".svg":
-                from lxml import etree
-
                 try:
-                    if not etree.fromstring(path.read_bytes()).tag.endswith("svg"):
+                    parser = etree.XMLParser(resolve_entities=False, no_network=True)
+                    if not etree.fromstring(path.read_bytes(), parser).tag.endswith(
+                        "svg"
+                    ):
                         invalid.add(key)
                 except etree.XMLSyntaxError:
                     invalid.add(key)

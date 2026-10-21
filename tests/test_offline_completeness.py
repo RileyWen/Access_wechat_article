@@ -43,6 +43,8 @@ class OfflineCompletenessTests(ReaderFixture, unittest.TestCase):
         self.assertEqual(
             offline_cache_state(self.article, self.manifest)[:3], ("partial", 0, 1)
         )
+        (self.article / "index.html").write_text("", encoding="utf-8")
+        self.assertEqual(offline_cache_state(self.article, self.manifest)[0], "partial")
 
     def test_uncaptured_remote_image_is_in_the_expected_count(self):
         with (self.article / "index.html").open("a", encoding="utf-8") as stream:
