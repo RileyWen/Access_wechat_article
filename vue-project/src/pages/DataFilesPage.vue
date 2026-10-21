@@ -414,13 +414,6 @@ const visibleRecordRows = computed(() => {
   return recordRows.value
 })
 
-const filePlaceholderRowCount = computed(() => {
-  if (archiveAccountsLoading.value || archiveAccountsError.value || visibleFileRows.value.length === 0) {
-    return 0
-  }
-  return Math.max(archiveTablePageSize - visibleFileRows.value.length, 0)
-})
-
 const recordPlaceholderRowCount = computed(() => {
   if (archiveArticlesLoading.value || archiveArticlesError.value || visibleRecordRows.value.length === 0) {
     return 0
@@ -438,22 +431,23 @@ function makeStateCellAttrs(stateColumnKey: string, span: number) {
   }
 }
 
-const accountStateCellAttrs = makeStateCellAttrs('account', 3)
+const accountStateCellAttrs = makeStateCellAttrs('account', 4)
 const recordStateCellAttrs = makeStateCellAttrs('selection', 6)
 
 const accountTableColumns: ArchiveTableColumn[] = [
   { title: '公众号', key: 'account', dataIndex: 'account', align: 'left', className: 'account-name-col', customCell: accountStateCellAttrs('account') },
-  { title: '篇数', key: 'articleCount', dataIndex: 'articleCount', width: 44, align: 'center', className: 'account-size-col', customCell: accountStateCellAttrs('articleCount') },
-  { title: '操作', key: 'actions', width: 94, align: 'center', className: 'action-cell account-action-col', customCell: accountStateCellAttrs('actions') },
+  { title: '最近采集', key: 'createdAt', dataIndex: 'createdAt', width: 132, align: 'center', className: 'account-time-col', customCell: accountStateCellAttrs('createdAt') },
+  { title: '篇数', key: 'articleCount', dataIndex: 'articleCount', width: 64, align: 'center', className: 'account-size-col', customCell: accountStateCellAttrs('articleCount') },
+  { title: '操作', key: 'actions', width: 206, align: 'center', className: 'action-cell account-action-col', customCell: accountStateCellAttrs('actions') },
 ]
 
 const recordTableColumns: ArchiveTableColumn[] = [
   { title: '', key: 'selection', width: 40, align: 'center', className: 'checkbox-cell record-action-col', customCell: recordStateCellAttrs('selection') },
   { title: '标题', key: 'title', dataIndex: 'title', align: 'left', className: 'record-title', customCell: recordStateCellAttrs('title') },
   { title: '发布时间', key: 'publishedAt', dataIndex: 'publishedAt', width: 128, align: 'center', className: 'record-time-col', customCell: recordStateCellAttrs('publishedAt') },
-  { title: '本地资源', key: 'resources', width: 228, align: 'left', customCell: recordStateCellAttrs('resources') },
+  { title: '本地资源', key: 'resources', width: 256, align: 'left', customCell: recordStateCellAttrs('resources') },
   { title: '大小', key: 'size', dataIndex: 'size', width: 68, align: 'center', className: 'record-size-col', customCell: recordStateCellAttrs('size') },
-  { title: '操作', key: 'open', width: 116, align: 'center', className: 'record-open-col', customCell: recordStateCellAttrs('open') },
+  { title: '操作', key: 'open', width: 188, align: 'center', className: 'record-open-col', customCell: recordStateCellAttrs('open') },
 ]
 
 const batchExportTableColumns = [
@@ -463,7 +457,7 @@ const batchExportTableColumns = [
   { title: '记录数', key: 'articleCount', dataIndex: 'articleCount', width: 116, align: 'center' as const },
 ]
 
-// Ant Table 的默认空状态不会占满 10 行，这里把状态行和占位行并入数据源，保持分页表格高度稳定。
+// 状态行保留明确反馈；公众号数量少时不填充空行，滚动交给固定高度的容器。
 const accountTableRows = computed<AccountTableRow[]>(() => {
   if (archiveAccountsLoading.value) {
     return [{ rowKind: 'state', tableKey: 'account-loading', stateText: '正在读取数据库中的公众号列表...', stateTone: 'default' }]
@@ -482,10 +476,6 @@ const accountTableRows = computed<AccountTableRow[]>(() => {
     tableKey: `account-${file.id}`,
     displayIndex: pageStart + index + 1,
   }))
-
-  for (let index = 0; index < filePlaceholderRowCount.value; index += 1) {
-    rows.push({ rowKind: 'placeholder', tableKey: `account-placeholder-${index + 1}` })
-  }
 
   return rows
 })
@@ -676,6 +666,23 @@ async function previewFile(file: FileRow) {
   recordCurrentPage.value = 1
   recordPageSize.value = 10
   await loadArchiveArticles(file, 1, recordPageSize.value)
+}
+
+function closePreview() {
+  // 让尚未返回的详情请求失效，避免返回列表后仍写入旧文章和选择状态。
+  archiveArticlesRequestId += 1
+  selectedPreviewFile.value = null
+  selectedRecordIndexes.value = []
+  recordRows.value = []
+  recordTotal.value = 0
+  archiveArticlesLoading.value = false
+  archiveArticlesError.value = ''
+  resourceDetailRecord.value = null
+}
+
+function switchPreviewAccount(value: unknown) {
+  const file = fileListRows.value.find((item) => item.id === value)
+  if (file) void previewFile(file)
 }
 
 // 刷新列表后按公众号 ID 重新绑定当前项，保留用户正在查看的详情页位置。
@@ -1188,12 +1195,7 @@ async function confirmDeleteDialog() {
 
 watch([selectedAccount, selectedCollectStartDate, selectedCollectEndDate], () => {
   fileCurrentPage.value = 1
-  selectedPreviewFile.value = null
-  selectedRecordIndexes.value = []
-  recordRows.value = []
-  recordTotal.value = 0
-  archiveArticlesError.value = ''
-  archiveArticlesLoading.value = false
+  closePreview()
 })
 
 watch(
@@ -1229,7 +1231,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <section class="management-page files-page" aria-label="数据文件">
+  <section class="management-page files-page" :class="{ 'has-preview': selectedPreviewFile }" aria-label="数据文件">
     <div class="metric-grid files-metrics config-summary-metrics">
       <article v-for="item in archiveMetrics" :key="item.label" class="metric-card page-panel">
         <span :class="['metric-icon', item.tone]">
@@ -1289,7 +1291,7 @@ onBeforeUnmount(() => {
       </article>
     </div>
 
-    <section class="file-list page-panel" aria-label="公众号列表">
+    <section v-show="!selectedPreviewFile" class="file-list page-panel" aria-label="公众号列表">
       <div class="file-list-header">
         <h2 class="section-heading">
           <AppIcon icon="fa-regular fa-rectangle-list" />
@@ -1361,7 +1363,6 @@ onBeforeUnmount(() => {
               </template>
               <span v-else-if="column.key === 'account'" class="account-name-cell" :title="record.account">
                 {{ record.account }}
-                <small class="account-collected-date">{{ record.createdAt }}</small>
               </span>
               <template v-else-if="column.key === 'createdAt'">
                 {{ record.createdAt }}
@@ -1418,14 +1419,29 @@ onBeforeUnmount(() => {
       <section class="record-detail page-panel">
         <img class="panel-corner-art detail-art" src="/assets/watercolor-leaf-branch-a.png" alt="" />
         <div class="record-detail-header">
-          <h2 class="section-heading">
-            <AppIcon icon="fa-regular fa-file-lines" />
-            记录详情
-          </h2>
+          <div class="record-heading-group">
+            <AButton v-if="selectedPreviewFile" class="preview-back-button" html-type="button" @click="closePreview">
+              <AppIcon icon="fa-solid fa-arrow-left" />
+              返回公众号列表
+            </AButton>
+            <h2 class="section-heading">
+              <AppIcon icon="fa-regular fa-file-lines" />
+              {{ selectedPreviewFile ? '文章记录' : '归档概览' }}
+            </h2>
+            <ASelect
+              v-if="selectedPreviewFile"
+              class="preview-account-switch"
+              :value="selectedPreviewFile.id"
+              :options="fileListRows.map(file => ({ label: file.account, value: file.id }))"
+              show-search
+              option-filter-prop="label"
+              aria-label="切换公众号"
+              @change="switchPreviewAccount"
+            />
+          </div>
 
           <div v-if="selectedPreviewFile" class="record-actions" aria-label="记录详情操作">
             <div class="record-selection-summary" aria-live="polite">
-              <span class="record-account-name">{{ selectedPreviewFile.account }}</span>
               <span>已选择 {{ selectedRecordCount }} 条</span>
             </div>
             <div class="record-action-buttons">
@@ -1465,7 +1481,7 @@ onBeforeUnmount(() => {
             <AButton :disabled="!selectedRecordCount || repairRunning || archiveCaching" @click="retryRecords()">补齐选中</AButton>
             <AButton :disabled="!selectedRecordCount || repairRunning || archiveCaching" @click="retryRecords(selectedRecordIds,'refresh')">重新获取</AButton>
             <AButton v-if="repairRunning" @click="stopTask()">停止补采</AButton>
-            <ASelect v-model:value="resourceFilter" :options="[{label:'全部状态',value:'all'},{label:'仅待补齐',value:'incomplete'},{label:'仅完整',value:'complete'}]" aria-label="筛选完整性" style="width:140px" />
+            <ASelect class="resource-filter" v-model:value="resourceFilter" :options="[{label:'全部状态',value:'all'},{label:'仅待补齐',value:'incomplete'},{label:'仅完整',value:'complete'}]" aria-label="筛选完整性" />
             <span v-if="repairMessage" class="repair-progress" role="status">{{ repairMessage }}</span>
           </div>
           <p class="repair-help">补齐只处理所选阶段的缺失项。需要重新获取评论时，请将对应公众号主页回到顶部。</p>
@@ -1605,13 +1621,8 @@ onBeforeUnmount(() => {
                 <AppIcon icon="fa-regular fa-hand-pointer" />
               </span>
               <div class="archive-overview-guide-copy">
-                <strong>选择左侧公众号查看记录详情</strong>
-                <span>点击左侧列表中的「预览」后，可查看文章标题、发布时间、归档大小和操作入口。</span>
-              </div>
-              <div class="archive-overview-guide-steps" aria-label="查看记录详情步骤">
-                <span>选择公众号</span>
-                <span>点击预览</span>
-                <span>查看详情</span>
+                <strong>从公众号进入文章列表</strong>
+                <span>点击左侧「预览」，查看文章和本地资源，并按需补齐。</span>
               </div>
             </div>
             <div class="archive-overview-chart-wrap">
@@ -1835,7 +1846,7 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .files-page {
-  grid-template-columns: 300px minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
   grid-template-rows: 72px 548px 106px;
   grid-template-areas:
     'metrics metrics'
@@ -1844,6 +1855,13 @@ onBeforeUnmount(() => {
   --archive-table-header-height: 34px;
   --archive-table-row-height: 38.2px;
   --archive-table-body-height: calc(var(--archive-table-row-height) * 10);
+}
+
+.files-page.has-preview {
+  grid-template-areas:
+    'metrics metrics'
+    'side side'
+    'quick quick';
 }
 
 .files-metrics {
@@ -1967,7 +1985,7 @@ onBeforeUnmount(() => {
   flex-direction: column;
   gap: 12px;
   min-height: 0;
-  padding: 18px 14px;
+  padding: 18px 20px;
 }
 
 .file-list-header {
@@ -2075,15 +2093,15 @@ onBeforeUnmount(() => {
 }
 
 .account-time-col {
-  width: 104px;
+  width: 132px;
 }
 
 .account-size-col {
-  width: 44px;
+  width: 64px;
 }
 
 .account-action-col {
-  width: 94px;
+  width: 206px;
 }
 
 .file-list .data-table th {
@@ -2118,16 +2136,19 @@ onBeforeUnmount(() => {
 }
 
 .account-name-cell {
+  display: block;
   max-width: 100%;
   overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .account-table .table-actions {
   display: inline-flex;
   align-items: center;
-  flex-wrap: wrap;
-  gap: 4px;
+  flex-wrap: nowrap;
+  gap: 8px;
   justify-content: center;
 }
 
@@ -2207,9 +2228,28 @@ onBeforeUnmount(() => {
   display: grid;
   grid-template-columns: max-content minmax(0, 1fr);
   align-items: center;
-  gap: 24px;
+  gap: 16px;
   min-height: 36px;
   min-width: 0;
+}
+
+.record-heading-group {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  min-width: 0;
+}
+
+.preview-back-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--ink);
+}
+
+.preview-account-switch {
+  width: 200px;
+  min-width: 120px;
 }
 
 .record-detail-header .section-heading {
@@ -2223,7 +2263,7 @@ onBeforeUnmount(() => {
   justify-content: space-between;
   justify-self: end;
   gap: 10px;
-  width: min(100%, 690px);
+  width: auto;
   min-width: 0;
   margin-top: 0;
 }
@@ -2231,16 +2271,11 @@ onBeforeUnmount(() => {
 .record-selection-summary {
   display: inline-flex;
   align-items: center;
-  gap: 14px;
-  flex: 1 1 auto;
+  gap: 8px;
   min-width: 0;
   min-height: 34px;
   padding: 0 12px;
-  border: 1px solid var(--line-soft);
-  border-radius: 8px;
   color: var(--ink);
-  background: rgba(255, 255, 255, 0.36);
-  box-shadow: var(--paper-shadow-sm);
   font-size: 13px;
   font-weight: 400;
   white-space: nowrap;
@@ -2294,8 +2329,10 @@ onBeforeUnmount(() => {
 }
 
 .record-empty-shell {
+  flex: 1;
   min-width: 0;
   min-height: 0;
+  overflow: auto;
 }
 
 .record-empty {
@@ -2398,10 +2435,13 @@ onBeforeUnmount(() => {
 
 .record-overview-empty {
   display: grid;
-  grid-template-columns: minmax(210px, 0.9fr) minmax(0, 1.1fr);
+  grid-template-columns: 176px minmax(0, 1fr);
+  align-content: start;
   align-items: center;
-  gap: 22px 30px;
-  padding: 26px 22px 30px;
+  gap: 28px 16px;
+  min-height: 0;
+  margin-top: 6px;
+  padding: 0;
   border: 0;
   background: transparent;
   box-shadow: none;
@@ -2410,14 +2450,13 @@ onBeforeUnmount(() => {
 
 .archive-overview-chart-wrap {
   display: grid;
-  gap: 14px;
   min-width: 0;
 }
 
 .archive-overview-guide {
   grid-column: 1 / -1;
   display: grid;
-  grid-template-columns: 32px minmax(0, 1fr) auto;
+  grid-template-columns: 32px minmax(0, 1fr);
   align-items: center;
   gap: 12px;
   min-width: 0;
@@ -2455,7 +2494,7 @@ onBeforeUnmount(() => {
 }
 
 .archive-overview-guide strong {
-  font-size: 16px;
+  font-size: 14px;
   font-weight: 500;
   line-height: 1.35;
 }
@@ -2465,31 +2504,6 @@ onBeforeUnmount(() => {
   font-size: 13px;
   font-weight: 400;
   line-height: 1.35;
-}
-
-.archive-overview-guide-steps {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  flex-wrap: wrap;
-  gap: 7px;
-  min-width: 0;
-}
-
-.archive-overview-guide-steps span {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 26px;
-  padding: 0 10px;
-  border: 1px solid rgba(45, 117, 214, 0.16);
-  border-radius: 999px;
-  color: #15386f;
-  background: rgba(255, 255, 255, 0.62);
-  font-size: 12px;
-  font-weight: 400;
-  line-height: 1;
-  white-space: nowrap;
 }
 
 .archive-overview-copy {
@@ -2547,9 +2561,11 @@ onBeforeUnmount(() => {
 
 .archive-overview-legend {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   gap: 6px 12px;
   margin-top: 4px;
+  max-height: 160px;
+  overflow: auto;
 }
 
 .archive-overview-legend span {
@@ -2617,7 +2633,7 @@ onBeforeUnmount(() => {
 }
 
 .record-open-col {
-  width: 116px;
+  width: 188px;
 }
 
 .record-table .checkbox-cell,
@@ -3213,11 +3229,11 @@ onBeforeUnmount(() => {
 
 .file-filters {
   display: grid;
-  grid-template-columns: 72px minmax(0, 1fr);
+  grid-template-columns: 72px minmax(150px, 1fr) minmax(270px, 1.3fr);
   justify-self: end;
   position: relative;
   z-index: 8;
-  width: min(100%, 520px);
+  width: 100%;
   gap: 10px;
   margin-top: 0;
   padding: 0;
@@ -3316,7 +3332,6 @@ onBeforeUnmount(() => {
 }
 
 .file-list :deep(.file-date-picker.ant-picker) {
-  grid-column: 1 / -1;
   display: inline-flex;
   align-items: center;
   height: 32px;
@@ -3647,7 +3662,9 @@ onBeforeUnmount(() => {
 .record-table :deep(.ant-table-thead > tr > th) {position:sticky;top:0;z-index:2;background:var(--frost-bg-strong)}
 .record-open-cell {display:flex;align-items:center;justify-content:center;gap:4px;flex-wrap:wrap}
 .record-open-cell .ant-btn {padding:0 4px;height:25px;font-size:12px}
-.account-collected-date {display:block;font-size:11px;color:var(--ink-muted);line-height:1.6}
-.account-table :deep(.ant-table-tbody > tr:not(.table-placeholder-row) > td) {padding:8px 5px;height:auto}
+.account-table :deep(.ant-table-tbody) {height:auto}
+.account-table :deep(.ant-table-tbody > tr:not(.table-state-row) > td) {padding:12px 8px;height:56px}
+.account-table :deep(.ant-table-thead > tr > th) {position:sticky;top:0;z-index:2;background:var(--frost-bg-strong)}
+.resource-filter {width:140px;margin-left:auto}
 .pending-repairs{margin:12px 0;padding:12px;background:#fff1db}.pending-repairs>div{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 </style>

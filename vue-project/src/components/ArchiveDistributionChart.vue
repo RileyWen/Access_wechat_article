@@ -31,7 +31,7 @@ async function renderChart() {
   chart = new Chart({
     container: chartContainerRef.value,
     autoFit: true,
-    height: 224,
+    height: 176,
   })
   chart.options({
     type: 'interval',
@@ -95,12 +95,12 @@ onBeforeUnmount(() => {
   position: relative;
   width: 100%;
   min-width: 0;
-  height: 224px;
+  height: 176px;
 }
 
 .archive-distribution-canvas {
   width: 100%;
-  height: 224px;
+  height: 176px;
 }
 
 .archive-distribution-center {
