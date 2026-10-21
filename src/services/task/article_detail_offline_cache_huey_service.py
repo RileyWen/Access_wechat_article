@@ -109,6 +109,7 @@ class ArticleDetailOfflineCacheHueyService(InitialContentStorageHueyService):
             account_name=account_name,
             card=card,
             skip_collected_records=skip_collected_records,
+            required_resources=('detail','offline'),
             store_article_detail=True,
             stateful_offline_cache=stateful_offline_cache,
         )
@@ -381,6 +382,12 @@ class ArticleDetailOfflineCacheHueyService(InitialContentStorageHueyService):
                 )
             if not (stage_dir / "index.html").is_file() or not (stage_dir / "assets").is_dir():
                 raise RuntimeError("子进程未生成完整的 index.html 和 assets")
+            from src.services.archive.reader_resources import load_json
+            from src.services.archive.resource_state_service import audit_article,needed
+            evidence=load_json(stage_dir/'assets/awa-manifest.json')
+            _,old_state=audit_article(self._database_path,self._config.storage.article_storage_root,int(saved.article_id))
+            if (not evidence.get('required_images_complete') or evidence.get('warnings')) and not needed(old_state,['offline']):
+                raise RuntimeError('本次离线缓存不完整，保留旧版缓存')
 
             finished_time = self._now().strftime("%Y-%m-%d %H:%M:%S")
             elapsed = time.monotonic() - started_at

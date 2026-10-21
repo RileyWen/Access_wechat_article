@@ -54,6 +54,7 @@ def build_main_flow_service(
         runtime_logger=runtime_logger,
         runner=coordinator.run,
         shutdown_callback=dispatcher.shutdown,
+        write_coordinator=getattr(detail_service,"_write_coordinator",None),
     )
     return service, dispatcher
 

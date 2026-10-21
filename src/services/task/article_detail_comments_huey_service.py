@@ -85,6 +85,7 @@ class ArticleDetailCommentsHueyService(InitialContentStorageHueyService):
             account_name=account_name,
             card=card,
             skip_collected_records=skip_collected_records,
+            required_resources=('detail','comments','avatars'),
             store_article_detail=True,
         )
         comment_item = {"label": "存储评论信息", "value": "开启（锁定）"}

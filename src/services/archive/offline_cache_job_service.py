@@ -197,7 +197,9 @@ class OfflineCacheJobService:
             except ValueError:
                 targets.append(record)
                 continue
-            if has_complete_offline_cache(article_directory):
+            from src.services.archive.resource_state_service import audit_article,needed
+            _,resource_state=audit_article(self.database_path,self.storage_root,record.id)
+            if not needed(resource_state,['offline']):
                 skipped += 1
             else:
                 targets.append(record)
@@ -417,6 +419,12 @@ class OfflineCacheJobService:
                 )
             if not (stage_dir / "index.html").is_file() or not (stage_dir / "assets").is_dir():
                 raise RuntimeError("子进程未生成完整的 index.html 和 assets")
+            from src.services.archive.reader_resources import load_json
+            from src.services.archive.resource_state_service import audit_article,needed
+            evidence=load_json(stage_dir/'assets/awa-manifest.json')
+            _,old_state=audit_article(self.database_path,self.storage_root,target.id)
+            if (not evidence.get('required_images_complete') or evidence.get('warnings')) and not needed(old_state,['offline']):
+                raise RuntimeError('本次离线缓存不完整，保留旧版缓存')
             resource_manifest = ResourceManifestBuilder().build(
                 article_directory,
                 planned_paths=("index.html", "assets"),
@@ -455,6 +463,9 @@ class OfflineCacheJobService:
                 resource_paths=("index.html", "assets"),
                 database_operation=database_operation,
             )
+            from src.services.archive.resource_state_service import audit_article,set_attempt
+            key,state=audit_article(self.database_path,self.storage_root,target.id)
+            set_attempt(self.database_path,key,['offline'],state['offline']['artifact_status'],state['offline']['reason'])
             return OfflineCacheResultItem(
                 article_id=target.id,
                 article_title=target.article_title,
@@ -502,6 +513,9 @@ class OfflineCacheJobService:
     ) -> None:
         finished_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         try:
+            from src.services.archive.resource_state_service import audit_article,set_attempt
+            key,_=audit_article(self.database_path,self.storage_root,target.id)
+            set_attempt(self.database_path,key,['offline'],'failed',message)
             with self._write_coordinator.hold():
                 with sqlite_connection(self.database_path) as connection:
                     FetchHistoryRepository(connection).append(

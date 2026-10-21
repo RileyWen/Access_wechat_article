@@ -23,6 +23,8 @@ from src.modules.request.comment_requester import (
     normalize_article_url,
 )
 from src.services.archive.resource_commit_service import ResourceCommitService
+from src.services.archive.reader_resources import ImageDownloader, avatar_urls, comments_completeness, external_proxy, load_json, write_json
+from src.services.archive.resource_state_service import audit_article, set_attempt
 from src.services.capture.html_parse_save_service import ArticleSaveData
 from src.services.runtime.database_write_coordinator import DatabaseWriteCoordinator
 from src.storage.repositories.article_repository import ArticleRecord, ArticleRepository
@@ -96,6 +98,8 @@ class CommentCollectService:
         try:
             step_started = self._monotonic()
             record = self._load_article(context.db_path, article.article_id)
+            key, _ = audit_article(context.db_path, context.storage_root, article.article_id)
+            set_attempt(context.db_path, key, ['comments', 'avatars'], 'running')
             html_text, article_url, headers = _load_request_inputs(article.article_directory)
             _emit_event(
                 on_event,
@@ -117,7 +121,7 @@ class CommentCollectService:
                     name="检测 HTML 评论数",
                     started_at=step_started,
                     result=(
-                        "未解析到 HTML 评论数，判定无评论，未发起评论接口请求"
+                        "未解析到 HTML 评论数，保留旧数据并标记待补采"
                         if html_comment_count is None
                         else "HTML 评论数为 0，未发起评论接口请求"
                     ),
@@ -191,12 +195,10 @@ class CommentCollectService:
                     },
                 )
         except CommentParametersMissing as exc:
-            return ServiceResult(
-                status=TaskStatus.SKIPPED,
-                error_code=None,
-                message=str(exc),
-                duration_seconds=max(0.0, self._monotonic() - started_monotonic),
-            )
+            duration=max(0.0,self._monotonic()-started_monotonic)
+            if record is not None:
+                self._append_failure_safely(context=context,record=record,started=started,duration_seconds=duration,message=str(exc))
+            return ServiceResult.failure(ErrorCode.COMMENT_FETCH_FAILED,str(exc),duration_seconds=duration)
         except Exception as exc:
             duration = max(0.0, self._monotonic() - started_monotonic)
             message = _safe_error_message(exc)
@@ -240,113 +242,21 @@ class CommentCollectService:
         stop_reason: str,
         on_event: Callable[[dict[str, Any]], None] | None,
     ) -> ServiceResult[CommentCollectData]:
-        backup_root = context.temp_dir / "comment_cleanup_backup" / str(article.article_id) / article.attempt_id
-        try:
-            with self._write_coordinator.hold():
-                step_started = self._monotonic()
-                removed = _remove_comment_resources(
-                    article.article_directory,
-                    backup_root=backup_root,
-                )
-                _emit_event(
-                    on_event,
-                    name="跳过评论资源处理",
-                    started_at=step_started,
-                    result=(
-                        "未解析到 HTML 评论数，未写入 comments/final.json"
-                        if html_comment_count is None
-                        else "HTML 评论数为 0，未写入 comments/final.json"
-                    ),
-                    details={
-                        "comment_path": "",
-                        "asset_count": 0,
-                        "removed_resource_count": len(removed),
-                    },
-                )
-
-                finished = self._now()
-                finished_text = _format_time(finished)
-                duration = max(0.0, self._monotonic() - started_monotonic)
-                manifest_holder: dict[str, ResourceManifest] = {}
-
-                def database_operation(connection):
-                    # 0 评论不产生评论文件，只刷新文章资源清单并记录本次评论检查结果。
-                    manifest = self._manifest_builder.build(article.article_directory)
-                    manifest_holder["value"] = manifest
-                    ArticleRepository(connection).update_resource_manifest(
-                        article.article_id,
-                        manifest,
-                        collected_time=finished_text,
-                    )
-                    return FetchHistoryRepository(connection).append(
-                        FetchHistoryWrite(
-                            article_id=article.article_id,
-                            account_id=article.account_id,
-                            target_account_name=record_account_name(record),
-                            target_title=record.article_title,
-                            target_link=record.article_link,
-                            task_type="comment_fetch",
-                            resource_manifest=ResourceManifest.from_types([]),
-                            status=TaskStatus.SUCCESS,
-                            started_time=_format_time(started),
-                            finished_time=finished_text,
-                            duration_seconds=duration,
-                            output_dir=article.archive_dir,
-                        )
-                    )
-
-                step_started = self._monotonic()
-                try:
-                    with sqlite_connection(context.db_path) as connection:
-                        history_id = database_operation(connection)
-                except Exception:
-                    _restore_comment_resources(
-                        article.article_directory,
-                        backup_root=backup_root,
-                    )
-                    raise
-                _discard_backup(backup_root)
-            _emit_event(
-                on_event,
-                name="提交无评论状态",
-                started_at=step_started,
-                result="已刷新资源清单并记录无评论结果",
-                details={"history_id": history_id},
-            )
-            return ServiceResult.success(
-                CommentCollectData(
-                    article_id=article.article_id,
-                    history_id=history_id,
-                    comment_path=None,
-                    comment_count=0,
-                    reply_count=0,
-                    page_count=0,
-                    pagination_complete=True,
-                    stop_reason=stop_reason,
-                    resource_manifest=manifest_holder.get("value")
-                    or self._manifest_builder.build(article.article_directory),
-                    asset_count=0,
-                    asset_dir=None,
-                    html_comment_count=html_comment_count,
-                    download_bytes=0,
-                ),
-                duration_seconds=duration,
-            )
-        except Exception as exc:
-            duration = max(0.0, self._monotonic() - started_monotonic)
-            message = _safe_error_message(exc)
-            self._append_failure_safely(
-                context=context,
-                record=record,
-                started=started,
-                duration_seconds=duration,
-                message=message,
-            )
-            return ServiceResult.failure(
-                ErrorCode.COMMENT_FETCH_FAILED,
-                message,
-                duration_seconds=duration,
-            )
+        if html_comment_count is None:
+            message = '未解析到评论数，不能判定无评论；请重新打开文章获取凭据'
+            self._append_failure_safely(context=context,record=record,started=started,
+                duration_seconds=self._monotonic()-started_monotonic,message=message)
+            return ServiceResult.failure(ErrorCode.COMMENT_FETCH_FAILED,message)
+        fetched = CommentFetchData(package={
+            'schema_version':'wechat_comments_raw_v1',
+            'collect_time':self._now().isoformat(timespec='seconds'),
+            'summary':{'pagination_complete':True,'stop_reason':'confirmed_empty',
+                       'top_level_comment_count':0,'reply_count':0},'comments':[]},
+            comment_count=0,reply_count=0,page_count=0,pagination_complete=True,
+            stop_reason='confirmed_empty')
+        return self._store_fetched_comments(context=context,article=article,record=record,
+            started=started,started_monotonic=started_monotonic,fetched=fetched,
+            html_comment_count=0,article_url='',headers={},timeout_seconds=10,on_event=on_event)
 
     def _store_fetched_comments(
         self,
@@ -367,7 +277,20 @@ class CommentCollectService:
             stage_root = context.temp_dir / "comment_stage" / str(article.article_id) / article.attempt_id
             backup_root = context.temp_dir / "comment_backup" / str(article.article_id) / article.attempt_id
             _prepare_stage(stage_root)
-            asset_count = 0
+            key, _ = audit_article(context.db_path,context.storage_root,article.article_id)
+            comment_state = comments_completeness(fetched.package)[0]
+            has_previous = isinstance(load_json(article.article_directory / COMMENT_RESOURCE_PATH).get('comments'),list)
+            if comment_state != 'complete' and has_previous:
+                raise RuntimeError('本次评论或回复分页不完整，保留已有评论')
+            project_root = Path(__file__).resolve().parents[3]
+            assets = ImageDownloader(proxy=external_proxy(project_root),cancel=context.cancel_token).download(
+                avatar_urls(fetched.package),stage_root,prefix='comments/assets/avatars',refresh=True)
+            write_json(stage_root / 'comments/assets/manifest.json',assets)
+            asset_count = assets['completed']
+            if assets['status'] != 'complete' and has_previous:
+                raise RuntimeError('本次头像未全部下载，保留已有评论和头像')
+            if context.cancel_token is not None and context.cancel_token.is_set():
+                raise RuntimeError('任务已停止，保留已有评论')
 
             step_started = self._monotonic()
             comment_file = stage_root / COMMENT_RESOURCE_PATH
@@ -386,7 +309,7 @@ class CommentCollectService:
                 },
             )
 
-            resource_paths = [COMMENT_RESOURCE_PATH]
+            resource_paths = [Path("comments")]
             finished = self._now()
             finished_text = _format_time(finished)
             duration = max(0.0, self._monotonic() - started_monotonic)
@@ -420,8 +343,6 @@ class CommentCollectService:
 
             step_started = self._monotonic()
             with self._write_coordinator.hold():
-                # 评论资源下载已停用，提交新 final.json 前清理旧 assets。
-                _remove_comment_asset_resources(article.article_directory)
                 history_id = self._commit_service.commit(
                     database_path=context.db_path,
                     stage_root=stage_root,
@@ -437,6 +358,9 @@ class CommentCollectService:
                 result="已保存 comments/final.json 并更新数据库",
                 details={"history_id": history_id},
             )
+            key, state = audit_article(context.db_path,context.storage_root,article.article_id)
+            for resource in ['comments','avatars']:
+                set_attempt(context.db_path,key,[resource],state[resource]['artifact_status'],state[resource]['reason'])
             return ServiceResult.success(
                 CommentCollectData(
                     article_id=article.article_id,
@@ -450,7 +374,7 @@ class CommentCollectService:
                     resource_manifest=manifest_holder.get("value")
                     or self._manifest_builder.build(article.article_directory),
                     asset_count=asset_count,
-                    asset_dir=None,
+                    asset_dir=article.article_directory / COMMENT_ASSETS_PATH,
                     html_comment_count=html_comment_count,
                     download_bytes=fetched.download_bytes,
                 ),
@@ -490,6 +414,8 @@ class CommentCollectService:
         message: str,
     ) -> None:
         try:
+            key, _ = audit_article(context.db_path,context.storage_root,record.id)
+            set_attempt(context.db_path,key,['comments','avatars'],'failed',message)
             finished = datetime.now()
             with self._write_coordinator.hold():
                 with sqlite_connection(context.db_path) as connection:

@@ -18,7 +18,10 @@ class DatabaseInitService:
             config.software.data_schema_version,
             project_root=self.project_root,
         )
-        return DatabaseInitializer().initialize(
+        database_path = DatabaseInitializer().initialize(
             config.storage.database_path,
             schema.sql,
         )
+        from src.services.archive.resource_state_service import recover_interrupted
+        recover_interrupted(database_path)
+        return database_path

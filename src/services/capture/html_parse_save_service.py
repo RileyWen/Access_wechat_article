@@ -111,6 +111,10 @@ class HtmlParseSaveService:
         except ArticleParseError as exc:
             return ServiceResult.failure(ErrorCode.PARSE_FAILED, str(exc))
 
+        expected_link = getattr(target,'expected_article_link','')
+        if expected_link and (detail.article_short_link or detail.article_link) != expected_link:
+            return ServiceResult.failure(ErrorCode.PARSE_FAILED,'打开的文章链接与指定补采目标不一致，未覆盖任何旧文件')
+
         collected_at = self._now()
         collected_text = _format_time(collected_at)
         safe_duration = max(0.0, float(duration_seconds))

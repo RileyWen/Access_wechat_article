@@ -131,7 +131,7 @@ class WechatCommentRequester:
                 break
             if new_count <= 0:
                 stop_reason = "no_new_comments"
-                pagination_complete = True
+                pagination_complete = False
                 break
             offset += new_count
             if interval and page_index + 1 < page_limit:

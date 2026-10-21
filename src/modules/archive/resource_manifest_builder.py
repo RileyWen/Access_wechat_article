@@ -13,6 +13,8 @@ RESOURCE_LOCATIONS: tuple[tuple[ResourceType, tuple[Path, ...]], ...] = (
     (ResourceType.ORIGIN_REQUEST, (Path("origin/request.json"),)),
     (ResourceType.COMMENT_DETAIL, (Path("comments/final.json"), Path("comments_final.json"))),
     (ResourceType.COMMENT_ASSETS, (Path("comments/assets"), Path("comment_assets"))),
+    (ResourceType.READER_HTML, (Path("reader/index.html"),)),
+    (ResourceType.READER_ASSETS, (Path("reader/assets"),)),
     (ResourceType.OFFLINE_HTML, (Path("index.html"),)),
     (ResourceType.OFFLINE_ASSETS, (Path("assets"),)),
 )

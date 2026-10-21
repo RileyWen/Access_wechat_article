@@ -535,6 +535,12 @@ class SingleArticleDetailHueyService:
             }
         )
         if matched is not None:
+            from src.services.archive.resource_state_service import audit_article,needed
+            _,resource_state=audit_article(self._database_path,Path(self._config.storage.article_storage_root),matched.id)
+            required=(options.card or {}).get('requiredResources') or ['detail']
+            if needed(resource_state,required):
+                matched=None
+        if matched is not None:
             lookup.update(
                 {
                     "matched": True,

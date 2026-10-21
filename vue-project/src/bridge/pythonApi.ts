@@ -56,6 +56,9 @@ export type TaskRuntimeState = {
 }
 
 export type TaskStatus = {
+  completedCount?: number
+  failedCount?: number
+  skippedCount?: number
   ok: boolean
   status: string
   message?: string
@@ -229,6 +232,7 @@ export type TaskRunOptions = {
     offlineArchive?: boolean
     commentInfo: boolean
     skipCollectedRecords: boolean
+    rebuiltReader?: boolean
     offlineArchiveMode?: 'standard' | 'beta'
   }
 }
@@ -520,7 +524,30 @@ export type ArchiveAccountItem = {
   sizeLabel: string
 }
 
+export type ArchiveResourceState = {
+  stage: string
+  label: string
+  artifact_status: string
+  completed: number
+  expected: number
+  reason: string
+  attempt_status: string
+  attempt_error: string
+  attempt_time: string
+}
+export type ArchivePendingTarget = {
+  target_key: string
+  account_name: string
+  title: string
+  published_date: string
+  locate_status: string
+  message: string
+  resources: Record<string, ArchiveResourceState>
+}
 export type ArchiveArticleItem = {
+  targetKey?: string
+  resources?: Record<string, ArchiveResourceState>
+  readerAvailable?: boolean
   id: number
   accountId: number
   title: string
@@ -1019,10 +1046,12 @@ export async function clearHistoryRecords() {
   return requestHttpApi<HistoryClearResult>('/api/history/records', { method: 'DELETE' })
 }
 
-export async function listArchiveAccountArticles(accountId: number, page = 1, pageSize = 10) {
+export async function listArchiveAccountArticles(accountId: number, page = 1, pageSize = 10, resourceStatus = 'all', resourceStages: string[] = []) {
   const query = new URLSearchParams({
     page: String(page),
     pageSize: String(pageSize),
+    resourceStatus,
+    resourceStages: resourceStages.join(','),
   })
   return requestHttpApi<ArchiveAccountArticlesResult>(
     `/api/archive/accounts/${encodeURIComponent(accountId)}/articles?${query.toString()}`,
@@ -1061,4 +1090,14 @@ export async function cacheArchiveAccount(accountId: number) {
 
 export async function getArchiveCacheJob(jobId: string) {
   return requestHttpApi<ArchiveCacheJob>(`/api/archive/cache/jobs/${encodeURIComponent(jobId)}`)
+}
+
+export async function retryArchiveArticles(articleIds: number[], resources: string[], mode: 'repair' | 'refresh' = 'repair', targetKeys: string[] = []) {
+  return postJson<TaskStatus>('/api/archive/articles/retry', { articleIds, resources, mode, targetKeys })
+}
+export async function openArchiveReader(articleId: number) {
+  return postJson<OpenArchiveArticleDirectoryResult>('/api/archive/articles/open-reader', { articleId })
+}
+export async function listPendingArchiveTargets() {
+  return getJson<{ ok: boolean; items: ArchivePendingTarget[] }>('/api/archive/pending-targets')
 }

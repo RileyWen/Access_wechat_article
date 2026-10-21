@@ -28,15 +28,20 @@ class CollectedArticleLookupService:
         database_path: str | Path,
         account_name: str,
         article_title: str,
+        storage_root: str | Path | None = None,
+        required_resources: tuple[str, ...] = ('detail',),
     ) -> bool:
         with sqlite_connection(database_path, write=False) as connection:
             account = AccountRepository(connection).get_by_name(account_name)
             if account is None:
                 return False
-            return ArticleRepository(connection).exists_by_account_and_title(
-                account.id,
-                article_title,
-            )
+            rows=connection.execute('SELECT id FROM awa_public_articles WHERE account_id=? AND article_title=?',(account.id,article_title)).fetchall()
+        if len(rows)!=1:
+            return False
+        from src.services.archive.resource_state_service import audit_article,needed
+        storage=Path(storage_root) if storage_root else Path(database_path).resolve().parents[2]/'storages'
+        _,state=audit_article(Path(database_path),storage,int(rows[0]['id']))
+        return not needed(state,required_resources)
 
     def find_by_account_date_and_title_fragment(
         self,

@@ -201,6 +201,8 @@ class ArticleCaptureService:
                             database_path=context.db_path,
                             account_name=home_info.account_name,
                             article_title=target.title,
+                            storage_root=context.storage_root,
+                            required_resources=tuple(['detail'] + (['comments','avatars'] if command.collect_comments else []) + (['offline'] if command.build_offline_cache else [])),
                         )
                     except Exception as exc:
                         message = (

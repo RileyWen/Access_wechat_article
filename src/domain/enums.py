@@ -44,6 +44,8 @@ class ResourceType(StringEnum):
     ORIGIN_REQUEST = "origin_request"
     COMMENT_DETAIL = "comment_detail"
     COMMENT_ASSETS = "comment_assets"
+    READER_HTML = "reader_html"
+    READER_ASSETS = "reader_assets"
     OFFLINE_HTML = "offline_html"
     OFFLINE_ASSETS = "offline_assets"
 

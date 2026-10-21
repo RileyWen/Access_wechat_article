@@ -29,6 +29,8 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Information Analysis",
 ]
 dependencies = [
+    "lxml>=6.0",
+    "pillow>=11.0",
     "fastapi>=0.138.1",
     "httpx2>=2.5.0",
     "huey>=3.3.4",

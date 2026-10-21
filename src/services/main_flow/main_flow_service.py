@@ -48,7 +48,9 @@ class MainFlowService:
         now: Callable[[], datetime] = datetime.now,
         id_factory: Callable[[], str] | None = None,
         shutdown_callback: Callable[[], None] | None = None,
+        write_coordinator: Any | None = None,
     ) -> None:
+        self._write_coordinator = write_coordinator
         self._project_root = Path(project_root)
         self._config = config
         self._db_path = Path(db_path)
@@ -90,6 +92,7 @@ class MainFlowService:
             context = MainFlowContext(
                 task_id=task_id,
                 db_path=self._db_path,
+                write_coordinator=self._write_coordinator,
                 storage_root=self._storage_root,
                 temp_dir=self._temp_root / task_id,
                 config_snapshot=self._config,

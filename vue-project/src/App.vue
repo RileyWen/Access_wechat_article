@@ -227,6 +227,7 @@ const downloadSelections = ref({
   articleDetail: true,
   offlineArchive: false,
   commentInfo: true,
+  rebuiltReader: true,
   skipCollectedRecords: true,
 })
 const offlineArchiveMode = ref<OfflineArchiveMode>('standard')
@@ -611,7 +612,8 @@ const offlineArchiveSelected = computed(() => downloadSelections.value.offlineAr
 
 const downloadOptions = [
   { key: 'commentInfo', label: '评论信息', locked: false },
-  { key: 'skipCollectedRecords', label: '跳过已采集记录', locked: false },
+  { key: 'rebuiltReader', label: '重建阅读页', locked: false },
+  { key: 'skipCollectedRecords', label: '跳过已完整记录', locked: false },
 ] as const
 
 const usageTips = [
@@ -735,6 +737,7 @@ function buildTaskRunOptions(): TaskRunOptions {
       articleDetail: true,
       offlineArchive: downloadSelections.value.offlineArchive,
       commentInfo: downloadSelections.value.commentInfo,
+      rebuiltReader: downloadSelections.value.rebuiltReader,
       skipCollectedRecords: downloadSelections.value.skipCollectedRecords,
       offlineArchiveMode: offlineArchiveMode.value,
     },

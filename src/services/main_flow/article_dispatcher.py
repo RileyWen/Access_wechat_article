@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import deque
 from dataclasses import dataclass, field
 import inspect
+from pathlib import Path
 from threading import Event, Lock, Thread, current_thread
 import time
 from typing import Any, Callable, Iterable, Mapping
@@ -411,7 +412,8 @@ class ArticleDispatcher:
         if foreground is None or detail is None:
             raise RuntimeError("前台和详情服务未完整配置")
 
-        payload = _card_payload(handle.target)
+        payload = {**_card_payload(handle.target),'expectedArticleLink':handle.options.expected_article_link,
+                   'requiredResources':list(handle.options.requested_resources)}
         foreground_kwargs = {
             "card_index": handle.target.sequence,
             "account_name": handle.target.account_name,
@@ -558,7 +560,8 @@ class ArticleDispatcher:
         get = getattr(self._service, "get", None)
         if not callable(start) or not callable(get):
             raise TypeError("单篇 Huey 服务必须提供 start() 和 get()")
-        payload = _card_payload(handle.target)
+        payload = {**_card_payload(handle.target),'expectedArticleLink':handle.options.expected_article_link,
+                   'requiredResources':list(handle.options.requested_resources)}
         kwargs = {
             "card_index": handle.target.sequence,
             "account_name": handle.target.account_name,
@@ -752,7 +755,8 @@ class ArticleDispatcher:
             previous = handle.latest_receipt
         if previous is None:
             return
-        failed = previous.status in {"failed", "cancelled"} or any(
+        resource_error = self._finish_resources(handle,previous)
+        failed = bool(resource_error) or previous.status in {"failed", "cancelled"} or any(
             value == "failed"
             for value in (previous.comments_status, previous.offline_status)
         )
@@ -768,8 +772,56 @@ class ArticleDispatcher:
                 **previous.to_dict(),
                 "phase": "finished",
                 "status": final_status,
+                "message": resource_error or previous.message,
             },
         )
+
+    def _finish_resources(self,handle,previous):
+        if not handle.options.target_key:
+            return ''
+        from src.services.archive.resource_state_service import audit_article,locate_target,needed,set_attempt
+        from src.services.archive.reader_service import ReaderService
+        from .completion_planner import find_article
+        ctx=handle.context
+        key=handle.options.target_key
+        requested=handle.options.requested_resources
+        try:
+            row=find_article(ctx.db_path,handle.target.account_name,handle.target.title_raw or handle.target.title_display,handle.target.article_date)
+            if row is None:
+                raise RuntimeError(previous.message or '文章详情未保存')
+            locate_target(ctx.db_path,key,'located',article_id=row['id'])
+            if previous.status not in {'failed','cancelled'} and not handle.cancel_event.is_set():
+                local=[s for s in requested if s in {'avatars','body_images','reader'}]
+                from src.services.archive.resource_state_service import safe_archive
+                existing_reader=(safe_archive(Path(ctx.storage_root),row['archive_dir'])/'reader/index.html').is_file()
+                if (handle.options.build_reader or existing_reader) and 'reader' not in local:
+                    local.append('reader')
+                if local:
+                    ReaderService(database_path=ctx.db_path,storage_root=ctx.storage_root,temp_root=ctx.temp_dir,
+                        project_root=Path(__file__).resolve().parents[3],write_coordinator=getattr(ctx,"write_coordinator",None)).repair(row['id'],local,
+                        comments_requested=handle.options.collect_comments or 'comments' in requested,
+                        cancel=handle.cancel_event)
+            _,state=audit_article(ctx.db_path,ctx.storage_root,row['id'])
+            for resource in requested:
+                status=state[resource]['artifact_status']
+                error=state[resource]['reason']
+                outcome={'detail':previous.detail_status,'comments':previous.comments_status,'offline':previous.offline_status}.get(resource,'')
+                if outcome in {'failed','cancelled'}:
+                    status='failed'
+                    error=previous.error_detail or previous.message or error
+                elif state[resource]['attempt_status'] in {'failed','partial'}:
+                    status=state[resource]['attempt_status']
+                    error=state[resource]['attempt_error'] or error
+                elif previous.status in {'failed','cancelled'} and resource in {'reader','avatars','body_images'}:
+                    status='partial'
+                    error='上游采集未完成，保留已有资源'
+                set_attempt(ctx.db_path,key,[resource],status,error)
+            _,state=audit_article(ctx.db_path,ctx.storage_root,row['id'])
+            incomplete=needed(state,requested)
+            return '仍有不完整阶段：'+','.join(incomplete) if incomplete else ''
+        except Exception as exc:
+            set_attempt(ctx.db_path,key,requested,'failed',str(exc))
+            return str(exc)
 
     def _emit_cancelled_finished(self, handle: SingleArticleHandle, message: str) -> None:
         """在所有可等待阶段收敛后发送一次不可被成功结果覆盖的取消回执。"""

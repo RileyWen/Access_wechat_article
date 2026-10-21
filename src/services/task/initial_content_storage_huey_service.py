@@ -43,6 +43,7 @@ class InitialContentStorageTaskOptions:
     skip_collected_records: bool = False
     store_article_detail: bool = True
     stateful_offline_cache: bool = False
+    required_resources: tuple[str, ...] = ('detail',)
 
 
 class _EmbeddedThreadConsumer(Consumer):
@@ -194,6 +195,7 @@ class InitialContentStorageHueyService:
         skip_collected_records: bool = False,
         store_article_detail: bool = True,
         stateful_offline_cache: bool = False,
+        required_resources: tuple[str, ...] = ('detail',),
     ) -> dict[str, Any]:
         # 该任务当前只支持“存储文章详情”开启；前端禁用只是 UI 保护，后端仍强制锁定。
         options = InitialContentStorageTaskOptions(
@@ -202,6 +204,7 @@ class InitialContentStorageHueyService:
             card=_safe_card_payload(card),
             skip_collected_records=bool(skip_collected_records),
             store_article_detail=True,
+            required_resources=tuple(required_resources),
             stateful_offline_cache=bool(stateful_offline_cache),
         )
         with self._lock:
@@ -1555,6 +1558,12 @@ class InitialContentStorageHueyService:
             title_fragment=title_fragment,
         )
         if matched is not None:
+            from src.services.archive.resource_state_service import audit_article,needed
+            _,resource_state=audit_article(self._database_path,Path(self._config.storage.article_storage_root),matched.id)
+            required=(options.card or {}).get('requiredResources') or options.required_resources
+            if needed(resource_state,required):
+                matched=None
+        if matched is not None:
             lookup.update(
                 {
                     "matched": True,
@@ -1796,6 +1805,7 @@ def _target_from_card(
         card.get("published_date")
     ) or ""
     return ArticleTarget(
+        expected_article_link=str(card.get('expectedArticleLink') or ''),
         account_name=account_name,
         title=_optional_text(card.get("title")) or raw_title,
         raw_title=raw_title,
@@ -1874,6 +1884,7 @@ def _task_payload(options: InitialContentStorageTaskOptions) -> dict[str, Any]:
         "skipCollectedRecords": options.skip_collected_records,
         "storeArticleDetail": True,
         "statefulOfflineCache": options.stateful_offline_cache,
+        "requiredResources": list(options.required_resources),
     }
 
 
@@ -1892,6 +1903,7 @@ def _options_from_payload(payload: dict[str, Any]) -> InitialContentStorageTaskO
         skip_collected_records=bool(payload.get("skipCollectedRecords")),
         store_article_detail=True,
         stateful_offline_cache=bool(payload.get("statefulOfflineCache")),
+        required_resources=tuple(payload.get("requiredResources") or ["detail"]),
     )
 
 

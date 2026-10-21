@@ -226,6 +226,13 @@ class ArchiveArticleOpenDirectoryPayload(BaseModel):
     articleId: int
 
 
+class ArchiveRetryPayload(BaseModel):
+    articleIds: list[int] = Field(default_factory=list)
+    targetKeys: list[str] = Field(default_factory=list)
+    resources: list[str] = Field(default_factory=lambda: ['detail','comments','avatars','body_images','reader'])
+    mode: str = 'repair'
+
+
 class ArchiveDeleteArticlesPayload(BaseModel):
     articleIds: list[int]
 
@@ -756,12 +763,59 @@ def create_backend_app(backend: DevBackendContext) -> FastAPI:
         account_id: int,
         page: int = 1,
         pageSize: int = 10,
+        resourceStatus: str = 'all',
+        resourceStages: str = '',
     ) -> dict[str, Any]:
-        return _archive_account_articles_payload(backend, account_id, page, pageSize)
+        return _archive_account_articles_payload(backend, account_id, page, pageSize, resourceStatus, resourceStages)
 
     @app.post("/api/archive/articles/open-directory")
     def open_archive_article_directory(payload: ArchiveArticleOpenDirectoryPayload):
         return _open_archive_article_directory(backend, payload.articleId)
+
+    @app.get('/api/archive/pending-targets')
+    def get_pending_archive_targets(accountName: str = ''):
+        from src.services.archive.resource_state_service import pending_targets
+        return {'ok':True,'items':pending_targets(backend.db_path,accountName)}
+
+    @app.post('/api/archive/articles/open-reader')
+    def open_archive_reader(payload: ArchiveArticleOpenDirectoryPayload):
+        from src.services.archive.resource_state_service import safe_archive
+        import webbrowser
+        with sqlite_connection(backend.db_path,write=False) as conn:
+            row=conn.execute('SELECT archive_dir FROM awa_public_articles WHERE id=?',(payload.articleId,)).fetchone()
+        if row is None:
+            return JSONResponse({'ok':False,'message':'文章不存在'},status_code=404)
+        reader=safe_archive(Path(backend.runtime.config.storage.article_storage_root),row['archive_dir'])/'reader/index.html'
+        if not reader.is_file():
+            return JSONResponse({'ok':False,'message':'请先生成重建阅读页'},status_code=404)
+        opened=bool(webbrowser.open(reader.as_uri()))
+        return {'ok':opened,'path':str(reader),'message':'已打开重建阅读页' if opened else '打开失败'}
+
+    @app.post('/api/archive/articles/retry')
+    def retry_archive_articles(payload: ArchiveRetryPayload):
+        from src.services.archive.resource_state_service import STAGES,ensure_schema
+        ensure_schema(backend.db_path)
+        ids=tuple(dict.fromkeys(payload.articleIds))
+        keys=tuple(dict.fromkeys(payload.targetKeys))
+        resources=tuple(dict.fromkeys(payload.resources))
+        if (not ids and not keys) or len(ids)+len(keys)>1000 or not resources or not set(resources)<=set(STAGES) or payload.mode not in {'repair','refresh'}:
+            return JSONResponse({'ok':False,'message':'请选择有效文章、阶段和补采模式'},status_code=400)
+        command=MainFlowCommand(retry_article_ids=ids,retry_target_keys=keys,retry_resources=resources,
+            skip_collected_records=payload.mode=='repair',collect_comments='comments' in resources,
+            build_reader='reader' in resources,archive_offline='offline' in resources)
+        from src.services.main_flow.completion_planner import selection_rows
+        from types import SimpleNamespace
+        rows=selection_rows(SimpleNamespace(db_path=backend.db_path),command)
+        if len(rows)!=len(ids)+len(keys) or len({r['target_key'] for r in rows})!=len(rows) or len({r['account_name'] for r in rows})!=1:
+            return JSONResponse({'ok':False,'message':'目标不存在、重复，或跨公众号；请每次选择一个公众号'},status_code=400)
+        if backend.main_flow_service is None:
+            return JSONResponse({'ok':False,'message':'主流程服务未就绪'},status_code=503)
+        try:
+            snapshot=backend.main_flow_service.start(command)
+        except MainFlowConflictError as exc:
+            return JSONResponse({'ok':False,'message':str(exc)},status_code=409)
+        backend.active_task_id=snapshot.task_id
+        return _main_flow_snapshot_payload(snapshot,backend)
 
     @app.delete("/api/archive/articles")
     def delete_archive_articles(payload: ArchiveDeleteArticlesPayload):
@@ -2742,8 +2796,24 @@ def _archive_account_articles_payload(
     account_id: int,
     page: int,
     page_size: int,
+    resource_status: str = 'all',
+    resource_stages: str = '',
 ) -> dict[str, Any]:
     safe_page_size = max(1, min(int(page_size), 100))
+    if resource_status != 'all':
+        from src.services.archive.resource_state_service import STAGES,needed
+        stages=tuple(s for s in resource_stages.split(',') if s in STAGES) or STAGES
+        if resource_status not in {'complete','incomplete'}:
+            return {'ok':False,'message':'未知完整性筛选条件','items':[],'page':1,'pageSize':safe_page_size,'total':0}
+        with sqlite_connection(backend.db_path,write=False) as conn:
+            candidates=conn.execute('SELECT * FROM awa_public_articles WHERE account_id=? ORDER BY published_article_time DESC,id DESC',(account_id,)).fetchall()
+        storage_root=Path(backend.runtime.config.storage.article_storage_root)
+        items=[_archive_article_with_resources(backend,row,storage_root) for row in candidates]
+        items=[item for item in items if (not needed(item['resources'],stages)) == (resource_status=='complete')]
+        total=len(items)
+        page=max(1,min(int(page),max(1,(total+safe_page_size-1)//safe_page_size)))
+        return {'ok':True,'status':'ok','accountId':account_id,'page':page,'pageSize':safe_page_size,
+                'items':items[(page-1)*safe_page_size:page*safe_page_size],'total':total,'dbPath':str(backend.db_path)}
     with sqlite_connection(backend.db_path, write=False) as connection:
         total = int(
             connection.execute(
@@ -2770,10 +2840,17 @@ def _archive_account_articles_payload(
         "accountId": int(account_id),
         "page": safe_page,
         "pageSize": safe_page_size,
-        "items": [_archive_article_item(row, storage_root) for row in rows],
+        "items": [_archive_article_with_resources(backend,row,storage_root) for row in rows],
         "total": total,
         "dbPath": str(backend.db_path),
     }
+
+
+def _archive_article_with_resources(backend,row,storage_root):
+    from src.services.archive.resource_state_service import audit_article
+    key,resources=audit_article(backend.db_path,storage_root,int(row['id']))
+    return {**_archive_article_item(row,storage_root),'targetKey':key,'resources':resources,
+            'readerAvailable':(storage_root/str(row['archive_dir'])/'reader/index.html').is_file()}
 
 
 def _archive_article_item(row: Any, storage_root: Path) -> dict[str, Any]:

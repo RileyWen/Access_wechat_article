@@ -4,8 +4,9 @@ import ArchiveDistributionChart from '../components/ArchiveDistributionChart.vue
 import { ReloadOutlined, SearchOutlined } from '@ant-design/icons-vue'
 import { notification } from 'ant-design-vue'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import type { ArchiveAccountItem, ArchiveArticleItem, ArchiveCacheJob, ArchiveCacheResultItem } from '../bridge/pythonApi'
+import type { ArchivePendingTarget, ArchiveResourceState, ArchiveAccountItem, ArchiveArticleItem, ArchiveCacheJob, ArchiveCacheResultItem } from '../bridge/pythonApi'
 import {
+  getTaskStatus, stopTask, retryArchiveArticles, openArchiveReader, listPendingArchiveTargets,
   cacheArchiveAccount,
   cacheArchiveArticles,
   deleteArchiveAccount,
@@ -29,6 +30,69 @@ type RecordRow = {
   archiveDir: string
   publishedAt: string
   size: string
+  resources: Record<string, ArchiveResourceState>
+  readerAvailable: boolean
+}
+
+const resourceOptions = [
+  {label:'文章详情',value:'detail'}, {label:'评论及回复',value:'comments'},
+  {label:'评论头像',value:'avatars'}, {label:'正文图片',value:'body_images'},
+  {label:'重建阅读页',value:'reader'}, {label:'原离线缓存',value:'offline'},
+]
+const repairResources = ref(['comments','avatars','body_images','reader'])
+const resourceFilter = ref('all')
+const repairRunning = ref(false)
+const repairMessage = ref('')
+const pendingTargets = ref<ArchivePendingTarget[]>([])
+let repairTimer: number | undefined
+const phaseLabels: Record<string,string> = {complete:'完整',partial:'不完整',failed:'失败',unknown:'待核验',pending:'待处理',running:'运行中',not_requested:'未请求'}
+function phaseText(value: ArchiveResourceState) {
+  const attempt = ['failed','partial','pending','running'].includes(value.attempt_status) ? `；本次${phaseLabels[value.attempt_status] || value.attempt_status}` : ''
+  const retained = value.artifact_status === 'complete' && ['failed','partial'].includes(value.attempt_status) ? '（旧版可读）' : ''
+  return `${value.label}：${phaseLabels[value.artifact_status] || value.artifact_status}${retained} ${value.completed}/${value.expected}${attempt}`
+}
+function phaseTitle(value: ArchiveResourceState) {
+  return [value.reason,value.attempt_error,value.attempt_time].filter(Boolean).join('；')
+}
+function phaseGood(value: ArchiveResourceState) {
+  return value.artifact_status === 'complete' && !['failed','partial','pending','running'].includes(value.attempt_status)
+}
+async function loadPendingTargets() {
+  try { pendingTargets.value = (await listPendingArchiveTargets()).items } catch { /* existing archive error remains visible */ }
+}
+async function pollRepair() {
+  try {
+    const task = await getTaskStatus()
+    repairMessage.value = `${task.message || task.status} · 已处理 ${task.completedCount ?? 0} · 失败 ${task.failedCount ?? 0}`
+    if (['completed','failed','cancelled','idle'].includes(task.status)) {
+      repairRunning.value = false
+      if (repairTimer) window.clearTimeout(repairTimer)
+      await refreshArchiveViewAfterCache()
+      await loadPendingTargets()
+      return
+    }
+    repairTimer = window.setTimeout(pollRepair,1200)
+  } catch (error) {
+    repairRunning.value = false
+    repairMessage.value = error instanceof Error ? error.message : '读取补采进度失败'
+  }
+}
+async function retryRecords(ids: number[] = selectedRecordIds.value, mode: 'repair' | 'refresh' = 'repair', keys: string[] = []) {
+  if ((!ids.length && !keys.length) || !repairResources.value.length) return
+  try {
+    repairRunning.value = true
+    repairMessage.value = '正在规划所选阶段；需要微信时请打开目标公众号主页并回到顶部'
+    await retryArchiveArticles(ids,repairResources.value,mode,keys)
+    await pollRepair()
+  } catch (error) {
+    repairRunning.value = false
+    showCacheNotification(error instanceof Error ? error.message : '启动补采失败','error')
+  }
+}
+async function openReader(record: RecordRow) {
+  try { await openArchiveReader(record.id) } catch(error) {
+    showCacheNotification(error instanceof Error ? error.message : '打开阅读页失败','error')
+  }
 }
 
 type FileRow = {
@@ -363,7 +427,7 @@ function makeStateCellAttrs(stateColumnKey: string, span: number) {
 }
 
 const accountStateCellAttrs = makeStateCellAttrs('index', 5)
-const recordStateCellAttrs = makeStateCellAttrs('selection', 5)
+const recordStateCellAttrs = makeStateCellAttrs('selection', 6)
 
 const accountTableColumns: ArchiveTableColumn[] = [
   { title: '序号', key: 'index', width: 46, align: 'center', customCell: accountStateCellAttrs('index') },
@@ -377,8 +441,9 @@ const recordTableColumns: ArchiveTableColumn[] = [
   { title: '', key: 'selection', width: 58, align: 'center', className: 'checkbox-cell record-action-col', customCell: recordStateCellAttrs('selection') },
   { title: '标题', key: 'title', dataIndex: 'title', align: 'left', className: 'record-title', customCell: recordStateCellAttrs('title') },
   { title: '文章发布时间', key: 'publishedAt', dataIndex: 'publishedAt', width: 142, align: 'center', className: 'record-time-col', customCell: recordStateCellAttrs('publishedAt') },
+  { title: '阶段完整性', key: 'resources', width: 240, align: 'left', customCell: recordStateCellAttrs('resources') },
   { title: '大小', key: 'size', dataIndex: 'size', width: 76, align: 'center', className: 'record-size-col', customCell: recordStateCellAttrs('size') },
-  { title: '操作', key: 'open', width: 86, align: 'center', className: 'record-open-col', customCell: recordStateCellAttrs('open') },
+  { title: '操作', key: 'open', width: 150, align: 'center', className: 'record-open-col', customCell: recordStateCellAttrs('open') },
 ]
 
 const batchExportTableColumns = [
@@ -526,6 +591,8 @@ function formatArchiveArticleRow(item: ArchiveArticleItem, index: number): Recor
     archiveDir: item.archiveDir || '',
     publishedAt: item.publishedArticleTime || '-',
     size: item.sizeLabel || '0 B',
+    resources: item.resources || {},
+    readerAvailable: Boolean(item.readerAvailable),
   }
 }
 
@@ -574,7 +641,7 @@ async function loadArchiveArticles(file: FileRow, page = recordCurrentPage.value
   archiveArticlesError.value = ''
 
   try {
-    const result = await listArchiveAccountArticles(file.id, page, pageSize)
+    const result = await listArchiveAccountArticles(file.id, page, pageSize, resourceFilter.value, repairResources.value)
     if (requestId !== archiveArticlesRequestId) {
       return
     }
@@ -1134,11 +1201,17 @@ defineExpose({
   refreshOnActivated,
 })
 
+watch([resourceFilter,repairResources], () => {
+  if (selectedPreviewFile.value) void loadArchiveArticles(selectedPreviewFile.value,1,recordPageSize.value)
+}, {deep:true})
+
 onMounted(() => {
   startCacheProcessRotation()
+  void loadPendingTargets()
 })
 
 onBeforeUnmount(() => {
+  if (repairTimer) window.clearTimeout(repairTimer)
   clearCachePolling()
   clearCacheProcessRotation()
 })
@@ -1367,8 +1440,24 @@ onBeforeUnmount(() => {
           </div>
         </div>
 
+        <details v-if="pendingTargets.length" class="pending-repairs">
+          <summary>未形成文章索引的待补采目标（{{ pendingTargets.length }}）</summary>
+          <div v-for="target in pendingTargets" :key="target.target_key">
+            <b>{{ target.account_name }} · {{ target.published_date }} · {{ target.title }}</b>
+            <span>{{ target.message }}</span>
+            <AButton :disabled="repairRunning" @click="retryRecords([], 'repair', [target.target_key])">重试此目标</AButton>
+          </div>
+        </details>
         <template v-if="selectedPreviewFile">
-
+          <div class="repair-controls">
+            <ASelect v-model:value="repairResources" mode="multiple" :options="resourceOptions" :max-tag-count="2" style="min-width:280px" aria-label="选择补采阶段" />
+            <AButton :disabled="!selectedRecordCount || repairRunning || archiveCaching" @click="retryRecords()">补齐选中</AButton>
+            <AButton :disabled="!selectedRecordCount || repairRunning || archiveCaching" @click="retryRecords(selectedRecordIds,'refresh')">强制更新所选阶段</AButton>
+            <AButton v-if="repairRunning" @click="stopTask()">停止补采</AButton>
+            <ASelect v-model:value="resourceFilter" :options="[{label:'全部状态',value:'all'},{label:'仅待补齐',value:'incomplete'},{label:'仅完整',value:'complete'}]" aria-label="筛选完整性" style="width:140px" />
+            <span role="status">{{ repairMessage }}</span>
+          </div>
+          <p class="repair-help">图片可用现有地址补下载；需要新凭据时，程序将扫描当前公众号主页，只打开所选目标。请先打开对应主页并回到顶部。</p>
           <div class="table-wrap record-table-wrap">
             <ATable
               class="archive-ant-table record-table"
@@ -1423,6 +1512,9 @@ onBeforeUnmount(() => {
                   <template v-else-if="column.key === 'publishedAt'">
                     {{ record.publishedAt }}
                   </template>
+                  <div v-else-if="column.key === 'resources'" class="resource-status-list">
+                    <span v-for="value in record.resources" :key="value.stage" :class="['resource-badge', {good:phaseGood(value)}]" :title="phaseTitle(value)">{{ phaseText(value) }}</span>
+                  </div>
                   <template v-else-if="column.key === 'size'">
                     {{ record.size }}
                   </template>
@@ -1435,6 +1527,8 @@ onBeforeUnmount(() => {
                     >
                       打开目录
                     </AButton>
+                    <AButton type="link" :disabled="!record.readerAvailable" @click="openReader(record)">阅读页</AButton>
+                    <AButton type="link" :disabled="repairRunning || archiveCaching" @click="retryRecords([record.id])">补采本篇</AButton>
                   </span>
                 </template>
               </template>
@@ -3506,4 +3600,11 @@ onBeforeUnmount(() => {
   background: rgba(17, 27, 44, 0.42);
 }
 
+</style>
+
+<style scoped>
+.repair-controls {display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:12px 0}
+.repair-help {color:#67757c;font-size:13px}.resource-status-list{display:flex;flex-wrap:wrap;gap:3px;padding:5px 0}
+.resource-badge{font-size:11px;background:#fff0dc;color:#8b5315;border-radius:3px;padding:1px 4px}.resource-badge.good{background:#e3f2e8;color:#26683f}
+.pending-repairs{margin:12px 0;padding:12px;background:#fff1db}.pending-repairs>div{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 </style>

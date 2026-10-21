@@ -73,6 +73,7 @@ class ArticleTarget:
     metric_text: str = ""
     metric_rect: tuple[int, int, int, int] | None = None
     raw_title: str = ""
+    expected_article_link: str = ""
 
 
 @dataclass(frozen=True, slots=True)

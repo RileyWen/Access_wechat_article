@@ -193,12 +193,11 @@ class ArticleRepository:
             """,
             tuple(params),
         ).fetchall()
-        for row in rows:
-            # UIA 标题和 HTML 标题可能只差全角/半角标点，比较前统一做临时归一化。
-            article_title = _normalize_title_for_lookup(str(row["article_title"]))
-            if normalized_title in article_title:
-                return _to_record(row)
-        return None
+        exact=[row for row in rows if _normalize_title_for_lookup(str(row['article_title']))==normalized_title]
+        matches=exact or [row for row in rows if normalized_title in _normalize_title_for_lookup(str(row['article_title']))]
+        if len(matches)>1:
+            raise ValueError('同一日期的标题匹配不唯一，请人工确认')
+        return _to_record(matches[0]) if matches else None
 
     def list_offline_cache_records_by_ids(
         self,

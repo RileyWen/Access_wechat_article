@@ -299,6 +299,18 @@ def archive_offline_article(
             resource_store.rewrite_saved_css()
             index_path = stage_dir / "index.html"
             index_path.write_text(rewritten_html, encoding="utf-8")
+            from src.services.archive.reader_resources import article_body,body_image_urls,write_json
+            try:
+                rewritten_body=article_body(rewritten_html)
+                # Local paths are recognized explicitly; do not interpret them as remote URLs.
+                missing_images=[n for n in rewritten_body.iter('img')
+                    if (n.get('data-src') or n.get('src') or '').startswith(('http:','https:','//'))]
+                required_images_complete=not missing_images
+            except Exception:
+                required_images_complete=False
+            write_json(assets_dir/'awa-manifest.json',{
+                'version':1,'files':list(resource_store.resource_map.values()),
+                'warnings':resource_store.warnings,'required_images_complete':required_images_complete})
             browser.close()
             browser = None
 

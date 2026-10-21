@@ -29,6 +29,10 @@ class MainFlowCommand:
     archive_offline: bool = False
     offline_archive_mode: OfflineArchiveMode = "standard"
     skip_collected_records: bool = False
+    build_reader: bool = True
+    retry_article_ids: tuple[int, ...] = ()
+    retry_target_keys: tuple[str, ...] = ()
+    retry_resources: tuple[str, ...] = ()
     single_task_interval_seconds: float = 0.0
 
     def __post_init__(self) -> None:
@@ -63,6 +67,10 @@ class MainFlowCommand:
             collect_comments=bool(selections.get("commentInfo", payload.get("collectComments", False))),
             archive_offline=bool(selections.get("offlineArchive", payload.get("archiveOffline", False))),
             offline_archive_mode=offline_mode,  # type: ignore[arg-type]
+            build_reader=bool(selections.get('rebuiltReader',True)),
+            retry_article_ids=tuple(int(x) for x in payload.get('retryArticleIds',[])),
+            retry_target_keys=tuple(str(x) for x in payload.get('retryTargetKeys',[])),
+            retry_resources=tuple(str(x) for x in payload.get('retryResources',[])),
             skip_collected_records=bool(
                 selections.get("skipCollectedRecords", payload.get("skipCollectedRecords", False))
             ),
@@ -87,6 +95,7 @@ class MainFlowContext:
     state: Any = field(repr=False, compare=False)
     # 事件入口只负责状态和日志聚合。
     event_sink: Any | None = field(default=None, repr=False, compare=False)
+    write_coordinator: Any | None = field(default=None, repr=False, compare=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,6 +127,10 @@ class HomeArticleTarget:
 
 @dataclass(frozen=True, slots=True)
 class SingleArticleOptions:
+    build_reader: bool = True
+    target_key: str = ''
+    requested_resources: tuple[str, ...] = ()
+    expected_article_link: str = ''
     skip_collected_records: bool = False
     collect_article_detail: bool = True
     collect_comments: bool = False
