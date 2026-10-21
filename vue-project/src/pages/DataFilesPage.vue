@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import AppIcon from '../components/AppIcon.vue'
 import ArchiveDistributionChart from '../components/ArchiveDistributionChart.vue'
-import { ReloadOutlined, SearchOutlined } from '@ant-design/icons-vue'
+import { ArrowLeftOutlined, ReloadOutlined, SearchOutlined } from '@ant-design/icons-vue'
 import { notification } from 'ant-design-vue'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { ArchivePendingTarget, ArchiveResourceState, ArchiveAccountItem, ArchiveArticleItem, ArchiveCacheJob, ArchiveCacheResultItem } from '../bridge/pythonApi'
@@ -255,6 +255,11 @@ const accountSelectOptions = computed<ArchiveAccountSelectOption[]>(() => {
     label: account,
     value: account,
   }))
+})
+
+const accountFilterValue = computed({
+  get: () => selectedAccount.value || undefined,
+  set: (value: string | undefined) => { selectedAccount.value = value || '' },
 })
 
 const selectedCollectDateRange = computed<CollectDateRangeValue>({
@@ -1309,11 +1314,11 @@ onBeforeUnmount(() => {
             刷新
           </AButton>
           <ASelect
-            v-model:value="selectedAccount"
+            v-model:value="accountFilterValue"
             class="file-ant-control file-ant-select account-select-trigger"
             show-search
             allow-clear
-            placeholder="选择公众号"
+            placeholder="搜索或选择公众号"
             :options="accountSelectOptions"
             :filter-option="filterArchiveAccountOption"
             :dropdown-match-select-width="false"
@@ -1421,7 +1426,7 @@ onBeforeUnmount(() => {
         <div class="record-detail-header">
           <div class="record-heading-group">
             <AButton v-if="selectedPreviewFile" class="preview-back-button" html-type="button" @click="closePreview">
-              <AppIcon icon="fa-solid fa-arrow-left" />
+              <ArrowLeftOutlined />
               返回公众号列表
             </AButton>
             <h2 class="section-heading">
@@ -2279,11 +2284,6 @@ onBeforeUnmount(() => {
   font-size: 13px;
   font-weight: 400;
   white-space: nowrap;
-}
-
-.record-account-name {
-  color: var(--ink-strong);
-  font-weight: 700;
 }
 
 .record-action-buttons {
@@ -3501,12 +3501,6 @@ onBeforeUnmount(() => {
   background: rgba(83, 132, 190, 0.16);
 }
 
-:global(.collector-app.dark) .archive-overview-guide-steps span {
-  color: #cbd8ea;
-  border-color: rgba(111, 154, 211, 0.18);
-  background: rgba(15, 24, 39, 0.5);
-}
-
 :global(.collector-app.dark) .record-empty-icon {
   color: #8fbded;
   background: rgba(83, 132, 190, 0.16);
@@ -3657,12 +3651,12 @@ onBeforeUnmount(() => {
 .resource-detail-grid {display:grid;gap:12px}
 .resource-detail-item {padding:10px 12px;border:1px solid var(--line);border-radius:6px}
 .resource-detail-item p {margin:5px 0 0;line-height:1.6;overflow-wrap:anywhere}
-.record-table :deep(.ant-table-tbody) {height:auto}
+.files-page :deep(.record-table .ant-table-tbody) {height:auto}
 .record-table :deep(.ant-table-tbody > tr > td) {height:auto;padding:8px}
 .record-table :deep(.ant-table-thead > tr > th) {position:sticky;top:0;z-index:2;background:var(--frost-bg-strong)}
 .record-open-cell {display:flex;align-items:center;justify-content:center;gap:4px;flex-wrap:wrap}
 .record-open-cell .ant-btn {padding:0 4px;height:25px;font-size:12px}
-.account-table :deep(.ant-table-tbody) {height:auto}
+.files-page :deep(.account-table .ant-table-tbody) {height:auto}
 .account-table :deep(.ant-table-tbody > tr:not(.table-state-row) > td) {padding:12px 8px;height:56px}
 .account-table :deep(.ant-table-thead > tr > th) {position:sticky;top:0;z-index:2;background:var(--frost-bg-strong)}
 .resource-filter {width:140px;margin-left:auto}
