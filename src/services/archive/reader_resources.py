@@ -288,7 +288,18 @@ def article_body(source: str):
     tree = dom.fromstring(source)
     nodes = tree.xpath('//*[@id="js_content"]')
     if not nodes:
-        raise ValueError("原始 HTML 缺少文章正文 js_content，需重新获取文章")
+        from src.modules.request.article_parser import extract_text_share_content
+
+        text = extract_text_share_content(source)
+        if not text.strip():
+            raise ValueError("原始 HTML 缺少可恢复的正文，需重新获取文章")
+        body = dom.Element("div", id="js_content")
+        for paragraph in text.split("\n"):
+            if paragraph.strip():
+                node = dom.Element("p")
+                node.text = paragraph
+                body.append(node)
+        return body
     body = nodes[0]
     for node in list(body.iterdescendants()):
         if node.tag in {

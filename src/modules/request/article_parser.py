@@ -100,7 +100,29 @@ def _has_valid_text_share_article(source: str) -> bool:
         return False
     title = _extract_title(source)
     published_time = _extract_publish_time(source)
-    return bool(title and published_time)
+    return bool(title and published_time and extract_text_share_content(source))
+
+
+def extract_text_share_content(source: str) -> str:
+    """Read embedded plain text without evaluating any site JavaScript."""
+    if not _is_text_share_article(source):
+        return ""
+    prefixes = (r"\bcontent_noencode\s*:\s*", r"\btext_page_info\s*:\s*\{\s*content\s*:\s*")
+    for prefix in prefixes:
+        match = re.search(prefix + r"(?P<quote>['\"])(?P<value>(?:\\[\s\S]|(?!(?P=quote))[\s\S])*)(?P=quote)", source)
+        if not match:
+            continue
+        def decode(escaped):
+            value=escaped.group(0)[1:]
+            if value.startswith('x'):
+                return chr(int(value[1:],16))
+            if value.startswith('u'):
+                return chr(int(value[1:],16))
+            return {'n':'\n','r':'\r','t':'\t','b':'\b','f':'\f','v':'\v'}.get(value,value)
+        text=re.sub(r"\\(?:x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|[nrtbfv'\"\\/])",decode,match.group('value'))
+        text=text.encode('utf-16-le','surrogatepass').decode('utf-16-le','replace')
+        return html_module.unescape(text)
+    return ""
 
 
 def _is_text_share_article(source: str) -> bool:

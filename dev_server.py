@@ -800,7 +800,7 @@ def create_backend_app(backend: DevBackendContext) -> FastAPI:
         resources=tuple(dict.fromkeys(payload.resources))
         if (not ids and not keys) or len(ids)+len(keys)>1000 or not resources or not set(resources)<=set(STAGES) or payload.mode not in {'repair','refresh'}:
             return JSONResponse({'ok':False,'message':'请选择有效文章、阶段和补采模式'},status_code=400)
-        command=MainFlowCommand(retry_article_ids=ids,retry_target_keys=keys,retry_resources=resources,
+        command=MainFlowCommand(target_count=len(ids)+len(keys),retry_article_ids=ids,retry_target_keys=keys,retry_resources=resources,
             skip_collected_records=payload.mode=='repair',collect_comments='comments' in resources,
             build_reader='reader' in resources,archive_offline='offline' in resources)
         from src.services.main_flow.completion_planner import selection_rows

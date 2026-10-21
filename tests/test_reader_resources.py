@@ -90,6 +90,20 @@ class ReaderFixture:
 
 
 class ReaderTests(ReaderFixture, unittest.TestCase):
+    def test_text_share_content_is_recovered_without_running_javascript(self):
+        source = r"""<html><body><script>window.item_show_type='10';window.cgiDataNew={text_page_info:{content:'fallback'},content_noencode:'第一段\x0a\x0a第二段\u4f60\x27，<img src="https://bad.example">'};</script><div id="js_article"></div></body></html>"""
+        (self.article / "origin/main.html").write_text(source, encoding="utf-8")
+        result = self.service.repair(1)
+        self.assertEqual(result["status"], "complete")
+        tree = html.fromstring(
+            (self.article / "reader/index.html").read_text(encoding="utf-8")
+        )
+        self.assertIn(
+            '第二段你\'，<img src="https://bad.example">', tree.text_content()
+        )
+        self.assertFalse(tree.xpath("//script"))
+        self.assertEqual(len(tree.xpath("//article//img")), 0)
+
     def test_full_render_is_local_portable_and_deduplicated(self):
         result = self.service.repair(1)
         self.assertEqual(result["status"], "complete")
