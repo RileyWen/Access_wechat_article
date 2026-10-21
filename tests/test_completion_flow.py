@@ -113,6 +113,25 @@ class CompletionFlowTests(ReaderFixture, unittest.TestCase):
         dispatcher.submit.assert_not_called()
         self.assertEqual(context.state.snapshot()["skippedCount"], 1)
 
+    def test_complete_retry_is_counted_as_skipped_without_local_work(self):
+        self.service.repair(1)
+        context = self.context()
+        scanner = Mock()
+        dispatcher = Mock()
+        with patch.object(MainFlowCoordinator, "_run_local") as repair:
+            MainFlowCoordinator(scanner=scanner, dispatcher=dispatcher).run(
+                context,
+                MainFlowCommand(
+                    retry_article_ids=(1,),
+                    retry_resources=("avatars", "reader"),
+                    skip_collected_records=True,
+                ),
+            )
+        repair.assert_not_called()
+        scanner.initialize.assert_not_called()
+        dispatcher.submit.assert_not_called()
+        self.assertEqual(context.state.snapshot()["skippedCount"], 1)
+
     def test_selected_comment_retry_only_clicks_selected_targets(self):
         self.add_article(2)
         self.add_article(3)
