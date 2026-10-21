@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+import urllib.request
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -89,25 +90,59 @@ def is_trusted(thumbprint: str) -> bool:
     return value
 
 
-def install_ca(ca_path: Path, thumbprint: str, *, check_only: bool) -> str:
+def app_request(endpoint: str, *, post: bool = False) -> dict:
+    # Never send this local control request through a configured network proxy.
+    request = urllib.request.Request(
+        "http://127.0.0.1:8766/api/ca/" + endpoint,
+        data=b"{}" if post else None,
+        headers={"Content-Type": "application/json"},
+    )
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    with opener.open(request, timeout=30) as response:
+        return json.load(response)
+
+
+def install_through_app(ca_path: Path, thumbprint: str) -> None:
+    status = app_request("status")
+    certificate = status.get("projectCertificate") or {}
+    app_thumbprint = "".join(str(certificate.get("thumbprint", "")).split()).upper()
+    if (not status.get("ok")
+            or Path(status.get("currentCaPath") or "").resolve() != ca_path.resolve()
+            or app_thumbprint != thumbprint):
+        raise RuntimeError("The running Access app is not using this project's CA path and fingerprint.")
+    result = app_request("install", post=True)
+    if not result.get("ok"):
+        raise RuntimeError(str(result.get("message") or "The running app could not install the CA."))
+
+
+def install_ca(ca_path: Path, thumbprint: str, *, check_only: bool,
+               via_running_app: bool = False) -> str:
     if is_trusted(thumbprint):
         return "already-installed"
     if check_only:
         return "not-installed"
-    result = subprocess.run(
-        ["certutil.exe", "-user", "-addstore", "Root", str(ca_path)],
-        capture_output=True, timeout=60,
-    )
-    if result.returncode:
-        raise RuntimeError(f"certutil failed (exit {result.returncode}); run as the Windows user who runs Access.")
+    if via_running_app:
+        install_through_app(ca_path, thumbprint)
+    else:
+        result = subprocess.run(
+            ["certutil.exe", "-user", "-addstore", "Root", str(ca_path)],
+            capture_output=True, timeout=60,
+        )
+        if result.returncode:
+            raise RuntimeError(
+                f"certutil failed (exit 0x{result.returncode & 0xffffffff:08X}); "
+                "run in the Access desktop user's terminal, or use --via-running-app from SSH."
+            )
     if not is_trusted(thumbprint):
-        raise RuntimeError("certutil completed, but the project's CA fingerprint was not found in CurrentUser\\Root.")
+        raise RuntimeError("Installation completed, but the project's CA fingerprint was not found in CurrentUser\\Root.")
     return "installed"
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--check", action="store_true", help="check only; do not create files or install a certificate")
+    parser.add_argument("--via-running-app", action="store_true",
+                        help="install through the Access desktop session's local API on port 8766 (for SSH)")
     parser.add_argument("--config", type=Path, default=PROJECT_ROOT / "data/custom.yaml",
                         help="custom YAML, resolved relative to the project root")
     args = parser.parse_args(argv)
@@ -122,7 +157,8 @@ def main(argv: list[str] | None = None) -> int:
         config_path = args.config if args.config.is_absolute() else PROJECT_ROOT / args.config
         config = load_app_config(config_path, project_root=PROJECT_ROOT)
         thumbprint = prepare_ca(config.proxy.confdir, config.proxy.ca_cert_path, check_only=args.check)
-        status = (install_ca(config.proxy.ca_cert_path, thumbprint, check_only=args.check)
+        status = (install_ca(config.proxy.ca_cert_path, thumbprint, check_only=args.check,
+                             via_running_app=args.via_running_app)
                   if thumbprint else "missing")
         installed = status in {"installed", "already-installed"}
         print(json.dumps({

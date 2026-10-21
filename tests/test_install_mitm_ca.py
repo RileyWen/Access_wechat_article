@@ -70,6 +70,28 @@ class InstallCaTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "fingerprint was not found"):
                 installer.install_ca(Path("ca.cer"), "A" * 40, check_only=False)
 
+    def test_remote_install_rejects_another_apps_ca_before_posting(self):
+        for path, thumbprint in [("other.cer", "A" * 40), ("ca.cer", "B" * 40)]:
+            with self.subTest(path=path, thumbprint=thumbprint):
+                status = {"ok": True, "currentCaPath": path,
+                          "projectCertificate": {"thumbprint": thumbprint}}
+                with patch.object(installer, "app_request", return_value=status) as request:
+                    with self.assertRaisesRegex(RuntimeError, "path and fingerprint"):
+                        installer.install_through_app(Path("ca.cer"), "A" * 40)
+                    request.assert_called_once_with("status")
+
+    def test_remote_install_verifies_the_user_store_after_app_import(self):
+        status = {"ok": True, "currentCaPath": "ca.cer",
+                  "projectCertificate": {"thumbprint": "A" * 40}}
+        with patch.object(installer, "app_request", side_effect=[status, {"ok": True}]) as request, \
+             patch.object(installer, "is_trusted", side_effect=[False, True]), \
+             patch.object(installer.subprocess, "run") as run:
+            self.assertEqual(installer.install_ca(Path("ca.cer"), "A" * 40, check_only=False,
+                                                 via_running_app=True), "installed")
+            self.assertEqual(request.call_count, 2)
+            request.assert_called_with("install", post=True)
+            run.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()
