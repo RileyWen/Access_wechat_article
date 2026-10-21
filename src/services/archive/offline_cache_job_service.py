@@ -31,9 +31,7 @@ from src.storage.repositories.fetch_history_repository import (
 from src.storage.sqlite.connection import sqlite_connection
 
 
-WECHAT_SHORT_LINK_PATTERN = re.compile(
-    r"https://mp\.weixin\.qq\.com/s/[A-Za-z0-9_-]+"
-)
+WECHAT_SHORT_LINK_PATTERN = re.compile(r"https://mp\.weixin\.qq\.com/s/[A-Za-z0-9_-]+")
 
 
 def has_complete_offline_cache(article_directory: str | Path) -> bool:
@@ -183,12 +181,18 @@ class OfflineCacheJobService:
         start: bool = True,
     ) -> OfflineCacheJob:
         with sqlite_connection(self.database_path, write=False) as connection:
-            targets = ArticleRepository(connection).list_offline_cache_records_by_ids(article_ids)
+            targets = ArticleRepository(connection).list_offline_cache_records_by_ids(
+                article_ids
+            )
         return self._create_job(targets, skipped=0, start=start)
 
-    def create_account_job(self, account_id: int, *, start: bool = True) -> OfflineCacheJob:
+    def create_account_job(
+        self, account_id: int, *, start: bool = True
+    ) -> OfflineCacheJob:
         with sqlite_connection(self.database_path, write=False) as connection:
-            records = ArticleRepository(connection).list_offline_cache_records_by_account(account_id)
+            records = ArticleRepository(
+                connection
+            ).list_offline_cache_records_by_account(account_id)
         targets: list[OfflineCacheArticleRecord] = []
         skipped = 0
         for record in records:
@@ -197,9 +201,15 @@ class OfflineCacheJobService:
             except ValueError:
                 targets.append(record)
                 continue
-            from src.services.archive.resource_state_service import audit_article,needed
-            _,resource_state=audit_article(self.database_path,self.storage_root,record.id)
-            if not needed(resource_state,['offline']):
+            from src.services.archive.resource_state_service import (
+                audit_article,
+                needed,
+            )
+
+            _, resource_state = audit_article(
+                self.database_path, self.storage_root, record.id
+            )
+            if not needed(resource_state, ["offline"]):
                 skipped += 1
             else:
                 targets.append(record)
@@ -354,7 +364,9 @@ class OfflineCacheJobService:
 
     def is_busy(self) -> bool:
         with self._lock:
-            return any(job.status in {"pending", "running"} for job in self._jobs.values())
+            return any(
+                job.status in {"pending", "running"} for job in self._jobs.values()
+            )
 
     def _run_target(
         self,
@@ -417,14 +429,28 @@ class OfflineCacheJobService:
                     str(raw_result.get("message") or "离线缓存失败"),
                     result=raw_result,
                 )
-            if not (stage_dir / "index.html").is_file() or not (stage_dir / "assets").is_dir():
+            if (
+                not (stage_dir / "index.html").is_file()
+                or not (stage_dir / "assets").is_dir()
+            ):
                 raise RuntimeError("子进程未生成完整的 index.html 和 assets")
             from src.services.archive.reader_resources import load_json
-            from src.services.archive.resource_state_service import audit_article,needed
-            evidence=load_json(stage_dir/'assets/awa-manifest.json')
-            _,old_state=audit_article(self.database_path,self.storage_root,target.id)
-            if (not evidence.get('required_images_complete') or evidence.get('warnings')) and not needed(old_state,['offline']):
-                raise RuntimeError('本次离线缓存不完整，保留旧版缓存')
+            from src.services.archive.resource_state_service import audit_article
+            from src.services.archive.offline_completeness import offline_cache_state
+
+            evidence = load_json(stage_dir / "assets/awa-manifest.json")
+            _, old_state = audit_article(
+                self.database_path, self.storage_root, target.id
+            )
+            cache_state = offline_cache_state(stage_dir, evidence)
+            cache_complete = cache_state[0] == "complete"
+            if (
+                not cache_complete
+                and old_state["offline"]["artifact_status"] == "complete"
+            ):
+                raise RuntimeError(
+                    "本次网页缓存不完整，已保留现有可用缓存：" + cache_state[3]
+                )
             resource_manifest = ResourceManifestBuilder().build(
                 article_directory,
                 planned_paths=("index.html", "assets"),
@@ -447,10 +473,14 @@ class OfflineCacheJobService:
                         target_link=target.article_link,
                         task_type="offline_cache",
                         resource_manifest=resource_manifest,
-                        status=TaskStatus.SUCCESS,
+                        status=TaskStatus.SUCCESS
+                        if cache_complete
+                        else TaskStatus.FAILED,
                         started_time=started_time,
                         finished_time=finished_time,
                         duration_seconds=elapsed,
+                        error_stage="" if cache_complete else "offline_completeness",
+                        error_message="" if cache_complete else cache_state[3],
                         output_dir=target.archive_dir,
                     )
                 )
@@ -463,15 +493,25 @@ class OfflineCacheJobService:
                 resource_paths=("index.html", "assets"),
                 database_operation=database_operation,
             )
-            from src.services.archive.resource_state_service import audit_article,set_attempt
-            key,state=audit_article(self.database_path,self.storage_root,target.id)
-            set_attempt(self.database_path,key,['offline'],state['offline']['artifact_status'],state['offline']['reason'])
+            from src.services.archive.resource_state_service import (
+                audit_article,
+                set_attempt,
+            )
+
+            key, state = audit_article(self.database_path, self.storage_root, target.id)
+            set_attempt(
+                self.database_path,
+                key,
+                ["offline"],
+                state["offline"]["artifact_status"],
+                state["offline"]["reason"],
+            )
             return OfflineCacheResultItem(
                 article_id=target.id,
                 article_title=target.article_title,
-                ok=True,
-                status="done",
-                message=str(raw_result.get("message") or "离线缓存完成"),
+                ok=cache_complete,
+                status="done" if cache_complete else "partial",
+                message="网页缓存完成" if cache_complete else cache_state[3],
                 archive_dir=target.archive_dir,
                 index_html_path=str(article_directory / "index.html"),
                 resource_count=int(raw_result.get("resource_count") or 0),
@@ -513,9 +553,13 @@ class OfflineCacheJobService:
     ) -> None:
         finished_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         try:
-            from src.services.archive.resource_state_service import audit_article,set_attempt
-            key,_=audit_article(self.database_path,self.storage_root,target.id)
-            set_attempt(self.database_path,key,['offline'],'failed',message)
+            from src.services.archive.resource_state_service import (
+                audit_article,
+                set_attempt,
+            )
+
+            key, _ = audit_article(self.database_path, self.storage_root, target.id)
+            set_attempt(self.database_path, key, ["offline"], "failed", message)
             with self._write_coordinator.hold():
                 with sqlite_connection(self.database_path) as connection:
                     FetchHistoryRepository(connection).append(
@@ -550,14 +594,20 @@ class OfflineCacheJobService:
     def _validate_article_short_link(article_link: str) -> str:
         normalized = str(article_link or "").strip()
         if WECHAT_SHORT_LINK_PATTERN.fullmatch(normalized) is None:
-            raise ValueError("文章缺少有效的微信文章短链：https://mp.weixin.qq.com/s/<slug>")
+            raise ValueError(
+                "文章缺少有效的微信文章短链：https://mp.weixin.qq.com/s/<slug>"
+            )
         return normalized
 
-    def _attempt_root(self, job_id: str, article_id: int, article_directory: Path) -> Path:
+    def _attempt_root(
+        self, job_id: str, article_id: int, article_directory: Path
+    ) -> Path:
         configured = self.temp_root / "offline-cache" / job_id / str(article_id)
         if configured.anchor.casefold() == article_directory.anchor.casefold():
             return configured
-        return article_directory.parent / ".awa-offline-cache" / job_id / str(article_id)
+        return (
+            article_directory.parent / ".awa-offline-cache" / job_id / str(article_id)
+        )
 
     def _record_progress(
         self,

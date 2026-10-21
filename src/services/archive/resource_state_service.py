@@ -26,7 +26,7 @@ STAGES = ("detail", "comments", "avatars", "body_images", "reader", "offline")
 LABELS = dict(
     zip(
         STAGES,
-        ("文章详情", "评论及回复", "评论头像", "正文图片", "重建阅读页", "原离线缓存"),
+        ("文章详情", "评论及回复", "评论头像", "正文图片", "重建阅读页", "网页缓存"),
     )
 )
 STATUSES = {
@@ -324,34 +324,25 @@ def audit_article(db: Path, storage: Path, article_id: int) -> tuple[str, dict]:
         if reader_complete
         else ("关联资源不完整" if valid_reader else reader_reason),
     )
-    offline_manifest = load_json(root / "assets/awa-manifest.json")
-    if not (root / "index.html").is_file():
-        checks["offline"] = ("unknown", 0, 1, "尚无原离线缓存")
-    elif not offline_manifest:
-        checks["offline"] = ("unknown", 0, 1, "旧离线缓存缺少完整性证据")
-    else:
-        files = offline_manifest.get("files", [])
-        count = sum(
-            (root / p).is_file()
-            for p in files
-            if (root / p).resolve().is_relative_to(root.resolve())
-        )
-        complete = (
-            count == len(files)
-            and not offline_manifest.get("warnings")
-            and offline_manifest.get("required_images_complete") is True
-        )
-        checks["offline"] = (
-            "complete" if complete else "partial",
-            count,
-            len(files),
-            "" if complete else "原离线资源存在缺失或下载警告",
-        )
+    from src.services.archive.offline_completeness import offline_cache_state
+
+    checks["offline"] = offline_cache_state(
+        root, load_json(root / "assets/awa-manifest.json")
+    )
     with sqlite_connection(db) as conn:
         for stage, (status, completed, expected, reason) in checks.items():
             conn.execute(
                 "UPDATE awa_resource_state SET artifact_status=?,completed=?,expected=?,reason=? WHERE target_key=? AND stage=?",
                 (status, completed, expected, reason, key, stage),
+            )
+        if checks["offline"][0] == "complete":
+            # Re-evaluate only the earlier blanket-warning verdict. An actual
+            # failed refresh must remain visible even when its saved page works.
+            conn.execute(
+                """UPDATE awa_resource_state SET attempt_status='complete',attempt_error=''
+ WHERE target_key=? AND stage='offline' AND attempt_status='partial'
+ AND attempt_error='原离线资源存在缺失或下载警告'""",
+                (key,),
             )
     return key, states(db, key)
 

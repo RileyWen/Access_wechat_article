@@ -33,7 +33,9 @@ READ_ORIGINAL_URL_PATTERNS = (
         re.IGNORECASE | re.DOTALL,
     ),
 )
-ANCHOR_OPEN_TAG_PATTERN = re.compile(r"<a\b(?P<attrs>[^>]*)>", re.IGNORECASE | re.DOTALL)
+ANCHOR_OPEN_TAG_PATTERN = re.compile(
+    r"<a\b(?P<attrs>[^>]*)>", re.IGNORECASE | re.DOTALL
+)
 JS_HEX_ESCAPE_PATTERN = re.compile(r"\\x(?P<value>[0-9a-fA-F]{2})")
 JS_UNICODE_ESCAPE_PATTERN = re.compile(r"\\u(?P<value>[0-9a-fA-F]{4})")
 EMBEDDED_MEDIA_URL_PATTERN = re.compile(
@@ -122,8 +124,12 @@ class CapturedResponseStore:
                 content_type=content_type,
             )
         except Exception as exc:
-            if resource_type == "media" or content_type.startswith(("audio/", "video/")):
-                self.warnings.append(f"媒体资源暂未离线保存，已继续保存图文：{url}：{exc}")
+            if resource_type == "media" or content_type.startswith(
+                ("audio/", "video/")
+            ):
+                self.warnings.append(
+                    f"媒体资源暂未离线保存，已继续保存图文：{url}：{exc}"
+                )
             else:
                 self.warnings.append(f"保存页面资源失败，已继续归档：{url}：{exc}")
             return False
@@ -147,7 +153,11 @@ class CapturedResponseStore:
         request_headers: dict[str, str],
     ) -> bool:
         source_url = str(url or "").strip()
-        if not source_url or source_url in self.resource_map or source_url in self._media_urls:
+        if (
+            not source_url
+            or source_url in self.resource_map
+            or source_url in self._media_urls
+        ):
             return False
         self.media_candidates.append(
             MediaCandidate(
@@ -219,7 +229,9 @@ def archive_offline_article(
             if navigation_cookies:
                 context.add_cookies(navigation_cookies)
             page = context.new_page()
-            page.set_default_timeout(max(500, int(request.resource_timeout_seconds * 1000)))
+            page.set_default_timeout(
+                max(500, int(request.resource_timeout_seconds * 1000))
+            )
             page.on("response", resource_store.capture)
 
             target_url = _navigation_target(request)
@@ -299,18 +311,21 @@ def archive_offline_article(
             resource_store.rewrite_saved_css()
             index_path = stage_dir / "index.html"
             index_path.write_text(rewritten_html, encoding="utf-8")
-            from src.services.archive.reader_resources import article_body,body_image_urls,write_json
-            try:
-                rewritten_body=article_body(rewritten_html)
-                # Local paths are recognized explicitly; do not interpret them as remote URLs.
-                missing_images=[n for n in rewritten_body.iter('img')
-                    if (n.get('data-src') or n.get('src') or '').startswith(('http:','https:','//'))]
-                required_images_complete=not missing_images
-            except Exception:
-                required_images_complete=False
-            write_json(assets_dir/'awa-manifest.json',{
-                'version':1,'files':list(resource_store.resource_map.values()),
-                'warnings':resource_store.warnings,'required_images_complete':required_images_complete})
+            from src.services.archive.reader_resources import write_json
+            from src.services.archive.offline_completeness import offline_cache_state
+
+            evidence = {
+                "version": 2,
+                "files": list(dict.fromkeys(resource_store.resource_map.values())),
+                "warnings": resource_store.warnings,
+            }
+            status, completed, expected, reason = offline_cache_state(
+                stage_dir, evidence
+            )
+            evidence.update(
+                status=status, completed=completed, expected=expected, reason=reason
+            )
+            write_json(assets_dir / "awa-manifest.json", evidence)
             browser.close()
             browser = None
 
@@ -550,7 +565,9 @@ def _download_explicit_video_posters(
         return
     request_context = getattr(getattr(page, "context", None), "request", None)
     if request_context is None:
-        resource_store.warnings.append("视频封面离线保存失败：缺少 Playwright 请求上下文")
+        resource_store.warnings.append(
+            "视频封面离线保存失败：缺少 Playwright 请求上下文"
+        )
         return
 
     _emit(on_event, "下载视频封面", time.monotonic() - started_at)
@@ -569,7 +586,9 @@ def _download_explicit_video_posters(
                 str(key).lower(): str(value)
                 for key, value in dict(getattr(response, "headers", {}) or {}).items()
             }
-            content_type = headers.get("content-type", "").split(";", 1)[0].strip().lower()
+            content_type = (
+                headers.get("content-type", "").split(";", 1)[0].strip().lower()
+            )
             if not content_type:
                 content_type = "image/jpeg"
             if not content_type.startswith("image/"):
@@ -680,7 +699,9 @@ def _download_context_image_urls(
         return
     request_context = getattr(getattr(page, "context", None), "request", None)
     if request_context is None:
-        resource_store.warnings.append("视频号附属图片未保存：缺少 Playwright 请求上下文")
+        resource_store.warnings.append(
+            "视频号附属图片未保存：缺少 Playwright 请求上下文"
+        )
         return
     _emit(on_event, "保存视频号附属图片", time.monotonic() - started_at)
     timeout_ms = max(500, int(max(0.0, timeout_seconds) * 1000))
@@ -698,7 +719,9 @@ def _download_context_image_urls(
                 str(key).lower(): str(value)
                 for key, value in dict(getattr(response, "headers", {}) or {}).items()
             }
-            content_type = headers.get("content-type", "").split(";", 1)[0].strip().lower()
+            content_type = (
+                headers.get("content-type", "").split(";", 1)[0].strip().lower()
+            )
             if not content_type.startswith("image/"):
                 resource_store.warnings.append("视频号附属图片响应不是图片")
                 continue
@@ -927,7 +950,9 @@ def _scroll_page(
         _bounce_scroll_for_lazy_load(page)
         page.wait_for_timeout(500)
         bounced = _read_scroll_snapshot(page)
-        bounced_top, bounced_height, _bounced_viewport = _normalize_scroll_snapshot(bounced)
+        bounced_top, bounced_height, _bounced_viewport = _normalize_scroll_snapshot(
+            bounced
+        )
         bounced_current = (
             bounced_top,
             bounced_height,
@@ -1003,7 +1028,9 @@ def _normalize_scroll_snapshot(snapshot: dict[str, Any]) -> tuple[int, int, int]
     return top, height, viewport
 
 
-def _emit(callback, name: str, elapsed_seconds: float, *, status: str = "running") -> None:
+def _emit(
+    callback, name: str, elapsed_seconds: float, *, status: str = "running"
+) -> None:
     if callback is None:
         return
     callback(
@@ -1016,9 +1043,11 @@ def _emit(callback, name: str, elapsed_seconds: float, *, status: str = "running
 
 
 def _should_capture(resource_type: str, content_type: str) -> bool:
-    return resource_type in CAPTURED_RESOURCE_TYPES or content_type.startswith(
-        ("image/", "video/", "audio/", "font/")
-    ) or content_type == "text/css"
+    return (
+        resource_type in CAPTURED_RESOURCE_TYPES
+        or content_type.startswith(("image/", "video/", "audio/", "font/"))
+        or content_type == "text/css"
+    )
 
 
 def _is_media_candidate(url: str, resource_type: str, content_type: str) -> bool:
