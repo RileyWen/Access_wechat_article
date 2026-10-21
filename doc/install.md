@@ -93,7 +93,27 @@ uv run playwright install chromium
 .playwright-browsers/
 ```
 
-## 5. 启动桌面程序
+## 5. 安装项目 MITM CA 证书
+
+在运行 Access 的 Windows 用户账户下，从项目根目录执行：
+
+```powershell
+& .\.venv\Scripts\python.exe .\scripts\install_mitm_ca.py
+```
+
+脚本读取系统配置及 `data/custom.yaml` 中的 `confdir`、`ca_cert_path`。首次运行会通过 mitmproxy 生成项目 CA；已有 CA 会保持原样。证书仅安装到当前用户的受信任根证书库 `Cert:\CurrentUser\Root`，无需管理员权限。重复执行会按指纹核验并跳过已安装的证书。
+
+仅检查、不创建文件或安装证书：
+
+```powershell
+& .\.venv\Scripts\python.exe .\scripts\install_mitm_ca.py --check
+```
+
+输出为 JSON，包含证书路径、SHA-1 指纹和安装状态；退出码 `0` 表示证书已安装，`1` 表示检查发现缺失或未安装，`2` 表示错误。可通过 `--config path/to/custom.yaml` 指定自定义配置，路径相对于项目根目录解析。也可以从任意工作目录使用脚本的绝对路径调用。
+
+证书安装后，在程序中重新执行启动自检或 CA 诊断。脚本不会启动采集或修改系统代理。`.mitmproxy/` 中包含签名私钥，应只保留在本机或受保护的备份中；不要提交到 Git 或复制到其他机器。若私钥缺失、公钥不匹配或 CA 已过期，脚本会报错并保留原文件，需先恢复或人工处理已有 CA。
+
+## 6. 启动桌面程序
 
 在项目根目录执行：
 
@@ -104,7 +124,7 @@ uv run python main.py
 程序会启动本地服务并打开桌面窗口。
 
 
-## 6. 安装验证
+## 7. 安装验证
 
 完成安装后，执行：
 
@@ -127,7 +147,7 @@ http://127.0.0.1:8766/index.html
 如果能打开桌面窗口，说明基础运行正常。
 
 
-## 7. 更新项目
+## 8. 更新项目
 
 如果使用 Git clone：
 
@@ -154,7 +174,7 @@ storages/
 
 然后再替换项目代码。
 
-## 8. 安装相关常见问题
+## 9. 安装相关常见问题
 
 ### uv 命令不存在
 
