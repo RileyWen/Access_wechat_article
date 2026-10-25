@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+import json
 from pathlib import Path
 from threading import Event, RLock, Thread
 from typing import Any, Callable
@@ -76,11 +77,7 @@ class MainFlowService:
         with self._lock:
             if self._active_task_id is not None:
                 active = self._tasks.get(self._active_task_id)
-                if active is not None and active.state.snapshot()["status"] in {
-                    "starting",
-                    "running",
-                    "stopping",
-                }:
+                if active is not None and active.finished_at is None:
                     raise MainFlowConflictError(self._active_task_id)
             task_id = f"main-{self._id_factory()}"
             state = MainFlowState(
@@ -103,6 +100,11 @@ class MainFlowService:
                 # 具体采集能力仍由下游服务完成，主流程只做编排和消息转发。
                 event_sink=lambda event: self._handle_context_event(state, event),
             )
+            context.temp_dir.mkdir(parents=True, exist_ok=True)
+            (context.temp_dir / "task-config.json").write_text(json.dumps({
+                **command.to_dict(),
+                "ui_action_interval_seconds": getattr(getattr(self._config, "window", None), "ui_action_interval_seconds", .5),
+            }, ensure_ascii=False, indent=2), encoding="utf-8")
             managed = _ManagedMainFlow(
                 context=context,
                 command=command,

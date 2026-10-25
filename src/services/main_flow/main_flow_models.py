@@ -21,6 +21,9 @@ def _text(value: Any) -> str:
 class MainFlowCommand:
     """主服务启动参数；只表达业务选择，不携带底层模块对象。"""
 
+    target_account_name: str = ""
+    account_mode: Literal["automatic", "manual"] = "manual"
+    close_home_after_task: bool = True
     target_count: int = 0
     date_filter_mode: DateFilterMode = "all"
     start_date: str | None = None
@@ -36,6 +39,10 @@ class MainFlowCommand:
     single_task_interval_seconds: float = 0.0
 
     def __post_init__(self) -> None:
+        if self.account_mode not in {"automatic", "manual"}:
+            raise ValueError("不支持的公众号打开模式")
+        if self.account_mode == "automatic" and not self.target_account_name.strip():
+            raise ValueError("请输入目标公众号完整名称")
         if int(self.target_count) < 0:
             raise ValueError("任务数量不能小于 0")
         if self.date_filter_mode not in {"all", "range", "before", "after"}:
@@ -60,6 +67,9 @@ class MainFlowCommand:
             or "standard"
         )
         return cls(
+            target_account_name=str(payload.get("targetAccountName") or "").strip(),
+            account_mode=payload.get("accountMode", "manual"),
+            close_home_after_task=bool(payload.get("closeHomeAfterTask", True)),
             target_count=max(0, int(payload.get("recordLimit", payload.get("targetCount", 0)) or 0)),
             date_filter_mode=mode,  # type: ignore[arg-type]
             start_date=payload.get("startDate") or payload.get("start_date"),

@@ -23,6 +23,7 @@ import {
   checkHealthTarget,
   getStartupSelfCheckStatus,
   listArchiveSummary,
+  listArchiveAccounts,
   openRuntimePath,
   runStartupHealthChecks,
   runStartupSelfCheck,
@@ -137,6 +138,11 @@ const pageCount = computed<number | null>({
     taskCountSnapshots[taskDateFilterMode.value].value = value
   },
 })
+const targetAccountName = ref(localStorage.getItem('awa-target-account') || '')
+const automaticAccount = ref(true)
+const closeHomeAfterTask = ref(true)
+const accountOptions = ref<{ value: string }[]>([])
+watch(targetAccountName, (name) => localStorage.setItem('awa-target-account', name))
 const taskDateFilterOpen = ref(false)
 const taskStartDate = ref('')
 const taskEndDate = ref('')
@@ -580,6 +586,7 @@ const statusItems = computed(() => [
   { label: '当前动作', value: runtimeState.value.currentAction || '待获取', icon: 'fa-solid fa-bolt' },
   { label: '公众号名称', value: runtimeState.value.accountName || '等待识别', icon: 'fa-brands fa-weixin' },
   { label: '任务信息', value: runtimeState.value.taskInfo || '待获取', icon: 'fa-regular fa-file-lines' },
+  { label: '页面清理', value: runtimeState.value.cleanup?.errors?.join('；') || ({ complete: '已关闭本轮页面', kept: '按设置保留页面', not_needed: '无需清理', blocked: '等待安全清理', failed: '清理未完成' } as Record<string, string>)[runtimeState.value.cleanup?.status || 'not_needed'], icon: 'fa-regular fa-window-close' },
   { label: '代理状态', value: runtimeState.value.proxyStatusLabel || '空闲', icon: 'fa-solid fa-network-wired' },
   { label: '采集进度', value: '', icon: 'fa-solid fa-gauge-high', progress: true },
   { label: '平均时长', value: runtimeState.value.averageArticleDurationLabel || '待统计', icon: 'fa-regular fa-clock' },
@@ -729,6 +736,9 @@ function handleOfflineArchiveModeChange(value: OfflineArchiveMode) {
 function buildTaskRunOptions(): TaskRunOptions {
   const mode = taskDateFilterMode.value
   return {
+    targetAccountName: targetAccountName.value.trim(),
+    accountMode: automaticAccount.value ? 'automatic' : 'manual',
+    closeHomeAfterTask: closeHomeAfterTask.value,
     recordLimit: normalizedPageCount.value,
     dateFilterMode: mode,
     startDate: mode === 'range' || mode === 'after' ? (taskStartDate.value || undefined) : undefined,
@@ -745,6 +755,7 @@ function buildTaskRunOptions(): TaskRunOptions {
 }
 
 function validateTaskRunOptions(options: TaskRunOptions): string | null {
+  if (options.accountMode === 'automatic' && !options.targetAccountName) return '请输入目标公众号完整名称。'
   if (options.dateFilterMode === 'range' && (!options.startDate || !options.endDate)) {
     return '请选择完整的日期范围。'
   }
@@ -1167,6 +1178,9 @@ async function refreshTaskRuntime() {
 async function refreshArchiveSummary() {
   try {
     archiveSummary.value = await listArchiveSummary()
+    const accounts = await listArchiveAccounts()
+    accountOptions.value = accounts.items.map((item) => ({ value: item.accountName }))
+    if (!targetAccountName.value && accountOptions.value.length === 1) targetAccountName.value = accountOptions.value[0]!.value
   } catch (error) {
     archiveSummary.value = null
     appendFrontendRuntimeError(`读取数据统计失败：${formatErrorMessage(error)}`)
@@ -1358,135 +1372,23 @@ onBeforeUnmount(() => {
 
         <template v-if="activePage === 'home'">
         <section class="task-column" aria-label="采集任务设置">
-          <article class="task-card task-card-volume panel">
-            <span class="step-badge">01</span>
-            <img class="task-art task-art-list" src="/assets/watercolor-task-list.png" alt="" />
-            <div class="task-volume-body">
-              <h2>指定记录总量</h2>
-              <div class="task-volume-row task-date-filter-row">
-                <div class="task-control-label task-label-with-hint">
-                  <span>日期筛选</span>
-                  <ATooltip :title="taskDateFilterHint" placement="top">
-                    <button
-                      class="task-label-hint"
-                      type="button"
-                      aria-label="查看日期筛选说明"
-                    >
-                      <QuestionCircleOutlined />
-                    </button>
-                  </ATooltip>
-                </div>
-                <ADropdown
-                  v-model:open="taskDateFilterOpen"
-                  :trigger="['click']"
-                  :disabled="taskSettingsLocked"
-                  placement="bottomLeft"
-                  overlay-class-name="task-date-filter-dropdown"
-                >
-                  <AButton
-                    class="task-date-filter-trigger"
-                    :disabled="taskSettingsLocked"
-                    aria-label="日期筛选方式"
-                  >
-                    <span>{{ taskDateFilterLabel }}</span>
-                    <DownOutlined
-                      :class="['task-date-filter-chevron', { 'is-open': taskDateFilterOpen }]"
-                    />
-                  </AButton>
-                  <template #overlay>
-                    <AMenu :selected-keys="[taskDateFilterMode]">
-                      <AMenuItem
-                        v-for="option in taskDateFilterOptions"
-                        :key="option.value"
-                        @click="selectTaskDateFilterMode(option.value)"
-                      >
-                        {{ option.label }}
-                      </AMenuItem>
-                    </AMenu>
-                  </template>
-                </ADropdown>
-              </div>
-
-              <div class="task-volume-row task-count-row">
-                <div class="task-control-label task-label-with-hint">
-                  <label for="page-count">设定任务</label>
-                  <ATooltip title="设为0时遍历日期范围内全部内容" placement="top">
-                    <button
-                      class="task-label-hint"
-                      type="button"
-                      aria-label="查看设定任务说明"
-                    >
-                      <QuestionCircleOutlined />
-                    </button>
-                  </ATooltip>
-                </div>
-                <div class="task-count-control">
-                  <AInputNumber
-                    id="page-count"
-                    v-model:value="pageCount"
-                    class="task-count-input"
-                    :min="0"
-                    :precision="0"
-                    :controls="true"
-                    :disabled="taskSettingsLocked"
-                    aria-label="设定任务"
-                  />
-                </div>
-              </div>
-
-              <label class="task-volume-row task-date-row">
-                <span class="task-control-label task-date-label download-option selected locked">
-                  <ASpin class="task-date-label-spin" size="small" :spinning="true" />
-                  {{ taskDateFieldLabel }}
-                </span>
-                <span class="task-date-control">
-                  <ARangePicker
-                    v-if="taskDateFilterMode === 'range'"
-                    v-model:value="taskDateRangeValue"
-                    class="task-date-picker task-date-range-picker"
-                    :allow-clear="true"
-                    :placeholder="['选择起始日期', '选择截止日期']"
-                    format="YYYY-MM-DD"
-                    value-format="YYYY-MM-DD"
-                    popup-class-name="task-date-picker-panel"
-                    :disabled="taskSettingsLocked"
-                    aria-label="任务日期范围"
-                  />
-                  <ADatePicker
-                    v-else-if="taskDateFilterMode === 'before'"
-                    v-model:value="taskEndDate"
-                    class="task-date-picker"
-                    :allow-clear="true"
-                    placeholder="选择截止日期"
-                    format="YYYY-MM-DD  dddd"
-                    value-format="YYYY-MM-DD"
-                    popup-class-name="task-date-picker-panel"
-                    :disabled="taskSettingsLocked"
-                    aria-label="任务截止日期"
-                  />
-                  <ADatePicker
-                    v-else-if="taskDateFilterMode === 'after'"
-                    v-model:value="taskStartDate"
-                    class="task-date-picker"
-                    :allow-clear="true"
-                    placeholder="选择起始日期"
-                    format="YYYY-MM-DD  dddd"
-                    value-format="YYYY-MM-DD"
-                    popup-class-name="task-date-picker-panel"
-                    :disabled="taskSettingsLocked"
-                    aria-label="任务起始日期"
-                  />
-                  <ADatePicker
-                    v-else-if="taskDateFilterMode === 'all'"
-                    class="task-date-picker"
-                    :value="null"
-                    placeholder="不限日期，无需选择"
-                    :disabled="true"
-                    aria-label="不限日期"
-                  />
-                </span>
-              </label>
+          <article class="task-card task-card-volume panel account-task-card">
+            <h2>公众号与采集范围</h2>
+            <AAutoComplete v-model:value="targetAccountName" :options="accountOptions"
+              :filter-option="(input: string, option: { value: string }) => option.value.includes(input)"
+              :disabled="taskSettingsLocked || !automaticAccount" placeholder="输入或选择公众号完整名称" aria-label="目标公众号" />
+            <div class="account-options">
+              <ACheckbox v-model:checked="automaticAccount" :disabled="taskSettingsLocked">自动打开主页</ACheckbox>
+              <ACheckbox v-model:checked="closeHomeAfterTask" :disabled="taskSettingsLocked">结束后关闭</ACheckbox>
             </div>
+            <div class="account-range-row">
+              <ASelect v-model:value="taskDateFilterMode" :options="taskDateFilterOptions" :disabled="taskSettingsLocked" aria-label="日期筛选方式" />
+              <label>篇数 <AInputNumber id="page-count" v-model:value="pageCount" :min="0" :precision="0" :disabled="taskSettingsLocked" aria-label="设定任务" title="0 表示遍历全部" /></label>
+            </div>
+            <ARangePicker v-if="taskDateFilterMode === 'range'" v-model:value="taskDateRangeValue" value-format="YYYY-MM-DD" :disabled="taskSettingsLocked" :placeholder="['起始日期', '截止日期']" />
+            <ADatePicker v-else-if="taskDateFilterMode === 'before'" v-model:value="taskEndDate" value-format="YYYY-MM-DD" :disabled="taskSettingsLocked" placeholder="选择截止日期" />
+            <ADatePicker v-else-if="taskDateFilterMode === 'after'" v-model:value="taskStartDate" value-format="YYYY-MM-DD" :disabled="taskSettingsLocked" placeholder="选择起始日期" />
+            <div v-else class="account-task-hint">{{ automaticAccount ? '自动核验公众号，采集“全部”列表' : '请先手动打开公众号“全部”页' }} · 0 篇表示全部</div>
           </article>
 
           <article class="task-card task-card-content panel">
@@ -2284,6 +2186,20 @@ input:focus-visible {
   filter: saturate(0.92) contrast(0.96);
 }
 
+.task-card.account-task-card {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: 22px 30px 22px 30px 30px;
+  gap: 6px;
+  padding: 10px 16px;
+}
+.account-task-card h2 { margin: 0; font-size: 17px; }
+.account-task-card .ant-select, .account-task-card .ant-picker { width: 100%; min-width: 0; }
+.account-options { display: flex; align-items: center; gap: 12px; }
+.account-options .ant-checkbox-wrapper { font-size: 13px; }
+.account-range-row { display: grid; grid-template-columns: minmax(0, 1fr) 122px; gap: 12px; }
+.account-range-row label { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+.account-range-row .ant-input-number { width: 84px; }
+.account-task-hint { align-self: center; font-size: 12px; color: var(--ink-soft); }
 .task-column {
   grid-area: tasks;
   display: grid;

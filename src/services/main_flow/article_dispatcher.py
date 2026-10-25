@@ -261,6 +261,14 @@ class ArticleDispatcher:
         handle.cancel_event.set()
         self._cancel_jobs(handle)
 
+    def wait_foreground_idle(self, timeout_seconds=15):
+        deadline = time.monotonic() + timeout_seconds
+        for service in (self._foreground_service, self._service):
+            wait = getattr(service, "wait_foreground_idle", None)
+            if callable(wait) and not wait(max(0, deadline - time.monotonic())):
+                return False
+        return True
+
     def shutdown(self) -> None:
         with self._lock:
             if self._closed:

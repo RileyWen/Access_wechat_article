@@ -39,6 +39,7 @@ export type ArticleRuntimeRecord = {
 }
 
 export type TaskRuntimeState = {
+  cleanup?: { status: string; errors: string[] }
   currentAction?: string
   accountName?: string
   taskInfo?: string
@@ -223,6 +224,9 @@ export type AuthStatus = {
 }
 
 export type TaskRunOptions = {
+  targetAccountName?: string
+  accountMode?: 'automatic' | 'manual'
+  closeHomeAfterTask?: boolean
   recordLimit: number
   dateFilterMode: 'all' | 'range' | 'before' | 'after'
   startDate?: string

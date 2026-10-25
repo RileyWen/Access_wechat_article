@@ -32,12 +32,14 @@ class MainFlowCoordinator:
         self,
         *,
         scanner: Any,
+        navigation_factory=None,
         dispatcher: Any,
         sleep: Callable[[float], None] = time.sleep,
         foreground_timeout_seconds: float = 120.0,
         post_task_timeout_seconds: float = 300.0,
         trace: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
+        self._navigation_factory = navigation_factory
         self._scanner = scanner
         self._dispatcher = dispatcher
         self._sleep = sleep
@@ -49,6 +51,7 @@ class MainFlowCoordinator:
         state = context.state
         handles: list[Any] = []
         handled_fingerprints: set[str] = set()
+        navigation = None
         session: Any | None = None
         flow_error: Exception | None = None
         article_error_reported = False
@@ -101,8 +104,15 @@ class MainFlowCoordinator:
                     or context.cancel_token.is_set()
                 ):
                     return
-            self._set_action(state, "请打开对应公众号主页并回到顶部；正在定位微信窗口")
-            session = self._scanner.initialize(command)
+            if self._navigation_factory is not None:
+                navigation = self._navigation_factory(context)
+                name = selections[0]["account_name"] if selections else command.target_account_name.strip()
+                mode = "automatic" if selections else command.account_mode
+                self._set_action(state, "导航到公众号主页" if mode == "automatic" else "核验已打开的公众号主页")
+                window = navigation.open(name, mode)
+                session = self._scanner.initialize(command, window=window)
+            else:
+                session = self._scanner.initialize(command)
             if selections and session.account_name != selections[0]["account_name"]:
                 raise ValueError("请先打开公众号主页：" + selections[0]["account_name"])
             account_name = str(getattr(session, "account_name", "") or "").strip()
@@ -218,7 +228,7 @@ class MainFlowCoordinator:
                     if not foreground.foreground_done:
                         raise RuntimeError("单篇任务未确认主页可以继续")
                     if command.single_task_interval_seconds > 0:
-                        self._sleep(command.single_task_interval_seconds)
+                        context.cancel_token.wait(command.single_task_interval_seconds)
 
                 if (
                     (selections and len(selected_done) == len(selections))
@@ -242,9 +252,24 @@ class MainFlowCoordinator:
             self._set_action(state, "正在清理运行资源")
             should_cancel = flow_error is not None or context.cancel_token.is_set()
             if should_cancel:
+                if navigation is not None and navigation.recovered:
+                    navigation.pacer.cancelled = lambda: True
                 self._cancel_handles(handles)
             error_count_before = int(state.snapshot().get("errorCount") or 0)
-            self._wait_post_tasks(handles, state, context)
+            try:
+                self._wait_post_tasks(handles, state, context)
+            except Exception as exc:
+                flow_error = flow_error or exc
+            finally:
+                if navigation is not None:
+                    self._set_action(state, "清理本轮微信页面")
+                    try:
+                        safe = self._dispatcher.wait_foreground_idle(timeout_seconds=15)
+                        cleanup = navigation.finish(close=command.close_home_after_task, foreground_safe=safe)
+                    except Exception as exc:
+                        cleanup = {"status": "failed", "errors": [str(exc)]}
+                    state.set_cleanup_result(cleanup)
+                    self._trace_event("cleanup-result", **cleanup)
             for item in selections:
                 if item["target_key"] not in selected_done:
                     message = (

@@ -808,6 +808,8 @@ def create_backend_app(backend: DevBackendContext) -> FastAPI:
         rows=selection_rows(SimpleNamespace(db_path=backend.db_path),command)
         if len(rows)!=len(ids)+len(keys) or len({r['target_key'] for r in rows})!=len(rows) or len({r['account_name'] for r in rows})!=1:
             return JSONResponse({'ok':False,'message':'目标不存在、重复，或跨公众号；请每次选择一个公众号'},status_code=400)
+        from dataclasses import replace
+        command = replace(command, account_mode="automatic", target_account_name=rows[0]['account_name'])
         if backend.main_flow_service is None:
             return JSONResponse({'ok':False,'message':'主流程服务未就绪'},status_code=503)
         try:
@@ -2560,6 +2562,8 @@ def _integer_config_keys() -> set[str]:
 
 def _float_config_keys() -> set[str]:
     return {
+        "window.ui_action_interval_seconds",
+        "main_flow.home_window.ui_action_interval_seconds",
         "proxy.startup_delay_seconds",
         "basic_settings.proxy_settings.startup_delay_seconds",
         "request.request_interval_seconds",

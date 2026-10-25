@@ -282,6 +282,7 @@ const settingsNumberValues = reactive<Record<string, number>>({
   'basic_settings.runtime_maintenance.log_retention_days': 30,
   'main_flow.home_window.activation_wait_seconds': 0.05,
   'main_flow.home_window.home_find_timeout_seconds': 3,
+  'main_flow.home_window.ui_action_interval_seconds': 0.5,
   'main_flow.home_scroll.scroll_initial_delay_seconds': 0.05,
   'main_flow.home_scroll.unchanged_before_bounce_seconds': 0.6,
   'main_flow.home_scroll.lazy_load_timeout_seconds': 3,
@@ -649,8 +650,9 @@ const selectedSettingsDetail = computed<SettingsDetailContent | null>(() => {
       }
     case 'main-home-window':
       return {
-        note: '主页窗口设置用于控制主流程定位和短暂激活公众号主页窗口的等待时间。',
+        note: '统一控制导航、文章打开、滚动和关闭的操作节奏；网络请求间隔独立设置。',
         fields: [
+          { label: '界面操作间隔', configKey: 'main_flow.home_window.ui_action_interval_seconds', value: '0.5', description: '相邻界面操作至少间隔该时长；加载等待已足够时不重复等待，双击保持为一个操作。', inputType: 'number-stepper', unit: '秒', min: 0.5, max: 30, step: 0.5 },
           { label: '激活主页窗口等待', configKey: 'main_flow.home_window.activation_wait_seconds', value: '0.05', description: '激活公众号主页窗口后等待窗口稳定，再继续读取 UIA 树或滚动。', inputType: 'number-stepper', unit: '秒', min: 0, max: 10, step: 0.05 },
           { label: '主页定位超时', configKey: 'main_flow.home_window.home_find_timeout_seconds', value: '3.0', description: '诊断工具查找微信主页窗口的最大等待时间；超过后直接提示先打开公众号主页。', inputType: 'number-stepper', unit: '秒', min: 0.5, max: 30, step: 0.5 },
         ],

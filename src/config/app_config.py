@@ -67,6 +67,7 @@ class WindowConfig:
     bounce_up_steps: int
     bounce_down_steps: int
     bounce_pause_seconds: float
+    ui_action_interval_seconds: float = 0.5
 
 
 @dataclass(frozen=True, slots=True)

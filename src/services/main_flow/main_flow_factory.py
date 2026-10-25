@@ -38,7 +38,13 @@ def build_main_flow_service(
             "offline": offline_service,
         },
     )
+    from src.modules.window.account_navigation import AccountNavigationSession
+
     coordinator = MainFlowCoordinator(
+        navigation_factory=lambda context: AccountNavigationSession(
+            window_factory, Path(project_root) / "data/runtime/navigation",
+            context.task_id, context.cancel_token, context.state,
+        ),
         scanner=scanner,
         dispatcher=dispatcher,
         foreground_timeout_seconds=_foreground_timeout(config),

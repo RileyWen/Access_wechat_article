@@ -22,6 +22,7 @@ class MainFlowState:
         self.target_count = max(0, int(target_count))
         self._now = now
         self._lock = RLock()
+        self._cleanup_result = {"status": "not_needed", "errors": []}
         self._status = "idle"
         self._message = ""
         self._current_action = "点击开始运行后，将从桌面主页窗口读取"
@@ -240,6 +241,10 @@ class MainFlowState:
                 self._status = "stopping"
             return True
 
+    def set_cleanup_result(self, result):
+        with self._lock:
+            self._cleanup_result = dict(result)
+
     def snapshot(self) -> dict[str, Any]:
         with self._lock:
             average = (
@@ -254,6 +259,7 @@ class MainFlowState:
                 else 0
             )
             return {
+                "cleanup": dict(self._cleanup_result),
                 "status": self._status,
                 "message": self._message,
                 "currentAction": self._current_action,

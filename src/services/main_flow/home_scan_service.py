@@ -83,12 +83,12 @@ class HomeScanService:
         self._sleep_fn = sleep
         self._monotonic = monotonic
 
-    def initialize(self, command: MainFlowCommand) -> HomeScanSession:
+    def initialize(self, command: MainFlowCommand, *, window=None) -> HomeScanSession:
         reader = self._window_factory.create_reader()
         timeout = float(
             getattr(getattr(self._config, "window", None), "home_find_timeout_seconds", 3.0)
         )
-        window = self._window_factory.find_home_window(
+        window = window or self._window_factory.find_home_window(
             reader=reader,
             timeout_seconds=timeout,
         )
@@ -102,6 +102,9 @@ class HomeScanService:
             raise HomeScanError(f"读取公众号名称失败：{exc}") from exc
         if not account_name:
             raise HomeScanError("未从公众号主页读取到公众号名称")
+
+        if command.target_account_name and account_name != command.target_account_name.strip():
+            raise HomeScanError("当前主页与目标公众号名称不一致")
 
         date_filter = ArticleDateFilter.create(
             mode=command.date_filter_mode,

@@ -4,6 +4,7 @@ from collections.abc import Callable
 from typing import Any
 
 from src.config.app_config import AppConfig
+from src.modules.window.ui_action_pacer import UiActionPacer, PacedComponent, ObservedTabService
 from src.modules.window.article_card_reader import UiaArticleCardReader
 from src.modules.window.article_clicker import ArticleClicker
 from src.modules.window.home_article_cursor import HomeArticleCursor
@@ -36,7 +37,9 @@ class WindowRuntimeFactory:
         tab_adapter_factory: Callable[..., Any] = UiaWechatBrowserTabAdapter,
         tab_service_factory: Callable[..., Any] = WechatBrowserTabService,
     ) -> None:
+        self.article_opened = None
         self._window = config.window
+        self.pacer = UiActionPacer(getattr(config.window, "ui_action_interval_seconds", .5))
         self._reader_factory = reader_factory
         self._scroller_factory = scroller_factory
         self._cursor_factory = cursor_factory
@@ -76,10 +79,11 @@ class WindowRuntimeFactory:
     def create_scroller(self) -> Any:
         """按当前主页滚动设置创建一次无鼠标移动的滚动器。"""
 
-        return self._scroller_factory(
+        scroller = self._scroller_factory(
             wheel_steps=self._window.scroll_wheel_steps,
             activation_wait_seconds=self._window.activation_wait_seconds,
         )
+        return PacedComponent(scroller, self.pacer, ("scroll", "scroll_up", "scroll_down"))
 
     def create_cursor(
         self,
@@ -116,7 +120,7 @@ class WindowRuntimeFactory:
         )
 
     def create_clicker(self) -> Any:
-        return self._clicker_factory()
+        return PacedComponent(self._clicker_factory(), self.pacer, ("click", "click_point"))
 
     def create_tab_service(self) -> Any:
         adapter = self._tab_adapter_factory(
@@ -124,7 +128,7 @@ class WindowRuntimeFactory:
                 self._window.article_close_confirm_timeout_seconds
             ),
         )
-        return self._tab_service_factory(adapter=adapter)
+        return ObservedTabService(self._tab_service_factory(adapter=adapter), self.pacer, self)
 
 
 __all__ = ["WindowRuntimeFactory"]

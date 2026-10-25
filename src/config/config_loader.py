@@ -126,6 +126,7 @@ def build_app_config(mapping: Mapping[str, Any], *, project_root: str | Path) ->
             close_as_capture_deadline=_as_bool(mitm_capture, "close_as_capture_deadline"),
         ),
         window=WindowConfig(
+            ui_action_interval_seconds=float(window.get("ui_action_interval_seconds", .5)),
             activation_wait_seconds=_as_float(window, "activation_wait_seconds"),
             home_find_timeout_seconds=_as_float(window, "home_find_timeout_seconds"),
             restore_focus_after_close=_as_bool(window, "restore_focus_after_close"),
@@ -315,6 +316,7 @@ def _latest_menu_mapping(mapping: Mapping[str, Any]) -> dict[str, Any]:
         (
             "activation_wait_seconds",
             "home_find_timeout_seconds",
+            "ui_action_interval_seconds",
         ),
     )
     _copy_keys(

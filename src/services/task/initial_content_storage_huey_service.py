@@ -419,6 +419,14 @@ class InitialContentStorageHueyService:
                 for job in self._jobs.values()
             )
 
+    def wait_foreground_idle(self, timeout_seconds: float = 15) -> bool:
+        # Public cancellation receipts precede the worker's finally block.
+        # Acquiring the actual lease confirms its UI/proxy cleanup has exited.
+        acquired = self._foreground_lock.acquire(timeout=max(0, timeout_seconds))
+        if acquired:
+            self._foreground_lock.release()
+        return acquired
+
     def cancel(self, job_id: str) -> bool:
         """请求取消一个 Huey 任务；真正的窗口清理仍在任务 finally 中完成。"""
 

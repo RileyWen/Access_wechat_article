@@ -82,6 +82,10 @@ def validate_app_config(config: AppConfig) -> None:
         if value <= 0:
             raise ConfigValidationError(f"{field_name} 必须大于 0")
 
+    import math
+    if not math.isfinite(config.window.ui_action_interval_seconds) or config.window.ui_action_interval_seconds < .5:
+        raise ConfigValidationError("界面操作间隔不能小于 0.5 秒")
+
     non_negative_values = (
         ("proxy.startup_delay_seconds", config.proxy.startup_delay_seconds),
         ("window.activation_wait_seconds", config.window.activation_wait_seconds),

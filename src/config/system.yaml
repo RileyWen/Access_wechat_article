@@ -34,6 +34,7 @@ basic_settings:
 main_flow:
   # 主页窗口：主流程定位和激活公众号主页窗口。
   home_window:
+    ui_action_interval_seconds: 0.5  # 相邻界面操作完成至开始的最短间隔，至少 0.5 秒。
     activation_wait_seconds: 0.05  # 激活主页窗口后的等待时间，避免窗口焦点尚未稳定。
     home_find_timeout_seconds: 3.0  # 查找已打开公众号主页窗口的最长时间。
 
