@@ -25,7 +25,7 @@ class MainFlowState:
         self._cleanup_result = {"status": "not_needed", "errors": []}
         self._status = "idle"
         self._message = ""
-        self._current_action = "点击开始运行后，将从桌面主页窗口读取"
+        self._current_action = "设置公众号和采集范围后开始运行"
         self._account_name = "等待识别"
         self._task_info = "待获取"
         self._progress_done = 0

@@ -190,7 +190,7 @@ const defaultHardwareStatus: HardwareStatus = {
   updatedAt: '',
 }
 const defaultRuntimeState: TaskRuntimeState = {
-  currentAction: '点击开始运行后，将从桌面主页窗口读取',
+  currentAction: '设置公众号和采集范围后开始运行',
   accountName: '等待识别',
   taskInfo: '待获取',
   proxyStatusLabel: '空闲',
@@ -216,7 +216,7 @@ const taskStatus = ref<TaskStatus>({
     status: 'pending',
     statusLabel: '待准备',
     accountName: '等待识别，请先打开微信 PC 端公众号主页',
-    description: '点击开始运行后，将从桌面主页窗口读取',
+    description: '设置公众号和采集范围后开始运行',
     originalCount: '待获取',
     friendFollowCount: '待获取',
     found: false,
@@ -274,7 +274,7 @@ const homeSnapshot = computed(() => taskStatus.value.home ?? {
   status: 'pending',
   statusLabel: '待准备',
   accountName: '等待识别，请先打开微信 PC 端公众号主页',
-  description: '点击开始运行后，将从桌面主页窗口读取',
+  description: '设置公众号和采集范围后开始运行',
   originalCount: '待获取',
   friendFollowCount: '待获取',
   found: false,
@@ -586,7 +586,7 @@ const statusItems = computed(() => [
   { label: '当前动作', value: runtimeState.value.currentAction || '待获取', icon: 'fa-solid fa-bolt' },
   { label: '公众号名称', value: runtimeState.value.accountName || '等待识别', icon: 'fa-brands fa-weixin' },
   { label: '任务信息', value: runtimeState.value.taskInfo || '待获取', icon: 'fa-regular fa-file-lines' },
-  { label: '页面清理', value: runtimeState.value.cleanup?.errors?.join('；') || ({ complete: '已关闭本轮页面', kept: '按设置保留页面', not_needed: '无需清理', blocked: '等待安全清理', failed: '清理未完成' } as Record<string, string>)[runtimeState.value.cleanup?.status || 'not_needed'], icon: 'fa-regular fa-window-close' },
+  { label: '页面清理', value: runtimeState.value.cleanup?.errors?.join('；') || ({ complete: '已关闭本轮页面', kept: '按设置保留页面', not_needed: '无需清理', blocked: '等待安全清理', failed: '清理未完成' } as Record<string, string>)[runtimeState.value.cleanup?.status || 'not_needed'], icon: 'fa-solid fa-check' },
   { label: '代理状态', value: runtimeState.value.proxyStatusLabel || '空闲', icon: 'fa-solid fa-network-wired' },
   { label: '采集进度', value: '', icon: 'fa-solid fa-gauge-high', progress: true },
   { label: '平均时长', value: runtimeState.value.averageArticleDurationLabel || '待统计', icon: 'fa-regular fa-clock' },
@@ -624,10 +624,10 @@ const downloadOptions = [
 ] as const
 
 const usageTips = [
-  '点击开始运行前打开目标 PC 端',
-  '手动打开目标公众号主页窗口',
-  '开始运行后将自动读取主页信息',
-  '出现跳转操作时无需手动干预',
+  '保持微信已登录、桌面可交互',
+  '输入公众号完整名称与采集篇数',
+  '自动打开主页，结束后关闭本轮页面',
+  '手动模式需自行打开公众号全部页',
 ]
 
 const complianceTips = [
@@ -1373,8 +1373,8 @@ onBeforeUnmount(() => {
         <template v-if="activePage === 'home'">
         <section class="task-column" aria-label="采集任务设置">
           <article class="task-card task-card-volume panel account-task-card">
-            <h2>公众号与采集范围</h2>
-            <AAutoComplete v-model:value="targetAccountName" :options="accountOptions"
+            <h2><label for="target-account">公众号与采集范围</label></h2>
+            <AAutoComplete id="target-account" v-model:value="targetAccountName" :options="accountOptions"
               :filter-option="(input: string, option: { value: string }) => option.value.includes(input)"
               :disabled="taskSettingsLocked || !automaticAccount" placeholder="输入或选择公众号完整名称" aria-label="目标公众号" />
             <div class="account-options">
@@ -1392,27 +1392,8 @@ onBeforeUnmount(() => {
           </article>
 
           <article class="task-card task-card-content panel">
-            <span class="step-badge">02</span>
-            <div class="task-art-column">
-              <img class="task-art task-art-heart" src="/assets/watercolor-task-heart.png" alt="" />
-              <ACheckbox
-                v-model:checked="downloadSelections[mandatoryDownloadOption.key]"
-                :class="[
-                  'download-option',
-                  'article-detail-option',
-                  {
-                    selected: downloadSelections[mandatoryDownloadOption.key],
-                    locked: mandatoryDownloadOption.locked || taskSettingsLocked,
-                  },
-                ]"
-                :disabled="mandatoryDownloadOption.locked || taskSettingsLocked"
-                title="文章详情为必选项，不能取消"
-              >
-                {{ mandatoryDownloadOption.label }}
-              </ACheckbox>
-            </div>
             <div class="task-body task-body-content">
-              <h2>获取指定内容</h2>
+              <h2>获取指定内容 <span class="required-content">文章详情必选</span></h2>
               <div class="download-options" aria-label="选择获取内容">
                 <div
                   :class="[
@@ -2233,9 +2214,13 @@ input:focus-visible {
 }
 
 .task-card-content {
-  grid-template-columns: 118px minmax(0, 1fr);
-  gap: 16px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
 }
+.task-card-content h2 { font-size: 17px; display: flex; align-items: center; justify-content: space-between; }
+.required-content { font-size: 12px; font-weight: 400; color: var(--ink-soft); }
+.task-card-content .download-options { width: 100%; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.task-card-content .download-option { min-height: 40px; margin: 0; }
 
 .task-volume-body {
   align-self: stretch;

@@ -12,7 +12,7 @@ class TaskRuntimeTracker:
         self,
         *,
         progress_total_label: str = "全部",
-        current_action: str = "点击开始运行后，将从桌面主页窗口读取",
+        current_action: str = "设置公众号和采集范围后开始运行",
         account_name: str = "等待识别",
         task_info: str = "待获取",
         proxy_status_label: str = "空闲",
