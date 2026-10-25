@@ -124,3 +124,46 @@ class CleanupTests(unittest.TestCase):
         before=self.nav.journal.read_bytes()
         self.assertEqual(self.nav.finish()['status'],'blocked')
         self.assertEqual(self.nav.journal.read_bytes(),before)
+
+class DocumentCleanupTests(unittest.TestCase):
+    def run_cleanup(self, documents, owned_id):
+        temp = tempfile.TemporaryDirectory(); self.addCleanup(temp.cleanup)
+        clock = Clock()
+        factory = NS(pacer=UiActionPacer(clock=clock.time,sleep=clock.sleep), create_home_guard=lambda:Mock())
+        nav = AccountNavigationSession(factory,temp.name,'tabs',Event(),Mock())
+        current = [0]; closed=[]
+        def document(_):
+            if not documents: return None
+            key,title=documents[current[0]]
+            return NS(Name=title,GetRuntimeId=lambda:[key])
+        def switch(_): current[0]=(current[0]+1)%len(documents)
+        def close(_):
+            closed.append(documents.pop(current[0]))
+            current[0]=0
+        window=NS(handle=123,control=object())
+        nav.auto=NS(SendKeys=switch)
+        page=OwnedPage(123,1,1,'金渐成','home',[99],[owned_id])
+        with patch('src.modules.window.account_navigation.find_wechat_document_control',side_effect=document), \
+             patch('src.modules.window.account_navigation._post_ctrl_w',side_effect=close), \
+             patch('src.modules.window.account_navigation.time.sleep',side_effect=clock.sleep), \
+             patch.object(nav,'_matching_window',side_effect=lambda p:window if documents else None):
+            nav._close_home(window,page)
+        return documents,closed,page
+
+    def test_reused_tab_row_does_not_close_neighbour(self):
+        remaining,closed,page=self.run_cleanup([(2,'金渐成'),(1,'金渐成Pro')],2)
+        self.assertEqual(remaining,[(1,'金渐成Pro')]);self.assertEqual(len(closed),1)
+        self.assertTrue(page.closed)
+
+    def test_same_title_uses_document_identity(self):
+        remaining,closed,_=self.run_cleanup([(1,'金渐成'),(2,'金渐成')],2)
+        self.assertEqual(remaining,[(1,'金渐成')]);self.assertEqual(closed,[(2,'金渐成')])
+
+    def test_previously_closed_document_is_idempotent(self):
+        remaining,closed,page=self.run_cleanup([(1,'金渐成Pro')],2)
+        self.assertEqual(remaining,[(1,'金渐成Pro')]);self.assertEqual(closed,[])
+        self.assertTrue(page.closed)
+
+    def test_unowned_identical_name_is_preserved(self):
+        with self.assertRaisesRegex(AccountNavigationError,'同名文档'):
+            self.run_cleanup([(1,'金渐成')],2)

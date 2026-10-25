@@ -233,12 +233,13 @@ class AccountNavigationSession:
             if w.process_name.lower() != 'wechatappex.exe' or not w.visible or w.is_minimized:
                 continue
             try:
-                if WechatHomeReader().read(w).account_name == name:
+                info = WechatHomeReader().read(w)
+                if info.account_name == name:
                     doc = find_wechat_document_control(w.control)
                     # Search documents can contain the name; a home must expose its tabs.
                     if (doc.HyperlinkControl(searchDepth=20, Name='全部').Exists(.05)
-                            or (doc.ButtonControl(searchDepth=20, Name='私信').Exists(.05)
-                                and doc.TextControl(searchDepth=20, Name=name).Exists(.05))):
+                            or ('已无更多消息' in info.document_text and '私信' in info.document_text
+                                and name in info.document_text.splitlines())):
                         result.append(w)
             except Exception:
                 continue
