@@ -110,6 +110,10 @@ class MainFlowCoordinator:
                 mode = "automatic" if selections else command.account_mode
                 self._set_action(state, "导航到公众号主页" if mode == "automatic" else "核验已打开的公众号主页")
                 window = navigation.open(name, mode)
+                if navigation.empty_home:
+                    state.set_account_name(name)
+                    state.set_task_info("公众号明确无文章，本轮零篇")
+                    return
                 session = self._scanner.initialize(command, window=window)
             else:
                 session = self._scanner.initialize(command)

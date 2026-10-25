@@ -155,6 +155,8 @@ class AccountNavigationSession:
         self.task_id, self.cancel_token, self.state = task_id, cancel_token, state
         self.pages: list[OwnedPage] = []
         self.home = None
+        self.empty_home = False
+        self.baseline_handles = set()
         self.lease = DesktopLease(self.directory / 'desktop.lock')
         self.journal = self.directory / 'session.json'
         self.started = False
@@ -230,7 +232,10 @@ class AccountNavigationSession:
                 if WechatHomeReader().read(w).account_name == name:
                     doc = find_wechat_document_control(w.control)
                     # Search documents can contain the name; a home must expose its tabs.
-                    if doc.HyperlinkControl(searchDepth=20, Name='全部').Exists(.05): result.append(w)
+                    if (doc.HyperlinkControl(searchDepth=20, Name='全部').Exists(.05)
+                            or (doc.ButtonControl(searchDepth=20, Name='私信').Exists(.05)
+                                and doc.TextControl(searchDepth=20, Name=name).Exists(.05))):
+                        result.append(w)
             except Exception:
                 continue
         if len(result) > 1:
@@ -251,6 +256,7 @@ class AccountNavigationSession:
         self.factory.article_opened = self.register_article
         self.pacer.cancelled = self.cancel_token.is_set
         self.pacer.events.clear()
+        self.baseline_handles = {w.handle for w in enumerate_uia_windows()}
         self._save('navigating')
         if mode == 'manual':
             self.home = self.factory.find_home_window(reader=self.factory.create_reader())
@@ -273,8 +279,16 @@ class AccountNavigationSession:
         self.factory.create_home_guard().activate(self.home)
         self._register(self.home.control, name, 'home', tab=True)
         self._action('准备公众号全部列表')
-        self._click(self._control(self.home.control, 'HyperlinkControl', '全部'), '切换全部')
-        self._to_top(name)
+        doc = find_wechat_document_control(self.home.control)
+        all_tab = doc.HyperlinkControl(searchDepth=20, Name='全部')
+        if not all_tab.Exists(.1):
+            text = WechatHomeReader().read(self.home).document_text
+            if '已无更多消息' not in text:
+                raise AccountNavigationError('公众号主页没有可采集的全部列表')
+            self.empty_home = True
+        else:
+            self._click(all_tab, '切换全部')
+            self._to_top(name)
         self._save('ready', account=name, route=self.route)
         return self.home
 
@@ -422,6 +436,8 @@ class AccountNavigationSession:
                 if page.tab_runtime_id:
                     self._close_home(w, page)
                 else:
+                    if page.role == 'unverified':
+                        raise AccountNavigationError('新增页面归属未核验，保留页面')
                     # A search host may have gained an unrelated tab. Close only
                     # when it still contains a search document; otherwise preserve.
                     if page.role == 'search':
@@ -489,6 +505,14 @@ class AccountNavigationSession:
             if not foreground_safe:
                 self._save('foreground_unverified')
                 return {'status': 'blocked', 'errors': ['前台工作线程尚未退出，未关闭主页']}
+            # A timeout can occur after opening a window but before its document
+            # becomes identifiable. Keep an explicit unresolved record, not a
+            # misleading successful cleanup result.
+            owned_handles = {page.handle for page in self.pages}
+            if self.baseline_handles:
+                for window in enumerate_uia_windows():
+                    if window.process_name.lower() == 'wechatappex.exe' and window.handle not in self.baseline_handles | owned_handles:
+                        self._register(window.control, window.title, 'unverified')
             errors = (self._close_pages() + self.ownership_errors) if close else []
             self._save('cleanup_failed' if errors else ('closed' if close else 'kept'))
             return {'status': 'failed' if errors else ('complete' if close else 'kept'), 'errors': errors}
