@@ -104,6 +104,8 @@ class MainFlowCoordinator:
                     or context.cancel_token.is_set()
                 ):
                     return
+            if context.cancel_token.is_set():
+                return
             if self._navigation_factory is not None:
                 navigation = self._navigation_factory(context)
                 name = selections[0]["account_name"] if selections else command.target_account_name.strip()

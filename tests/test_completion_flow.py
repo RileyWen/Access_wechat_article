@@ -85,9 +85,11 @@ class CompletionFlowTests(ReaderFixture, unittest.TestCase):
             "src.services.archive.reader_resources.ImageDownloader._fetch",
             return_value=self.blob,
         ):
-            MainFlowCoordinator(scanner=scanner, dispatcher=dispatcher).run(
+            navigation_factory = Mock()
+            MainFlowCoordinator(scanner=scanner, dispatcher=dispatcher, navigation_factory=navigation_factory).run(
                 context, command
             )
+            navigation_factory.assert_not_called()
         scanner.initialize.assert_not_called()
         dispatcher.submit.assert_not_called()
         self.assertTrue((self.storage / "article2/reader/index.html").is_file())
@@ -237,3 +239,48 @@ if __name__ == "__main__":
     import unittest
 
     unittest.main()
+
+
+class NavigationFlowTests(ReaderFixture, unittest.TestCase):
+    context = CompletionFlowTests.context
+    # Reuse real database fixtures while replacing only the desktop boundary.
+    def navigation(self):
+        navigation = Mock()
+        navigation.empty_home = False
+        navigation.finish.return_value = {"status": "complete", "errors": []}
+        return navigation
+
+    def test_verified_window_passed_directly_and_cleanup_after_drain(self):
+        context = self.context(); nav = self.navigation()
+        scanner = Mock(); dispatcher = Mock()
+        scanner.initialize.return_value = SimpleNamespace(account_name="测试")
+        scanner.scan_visible_targets.return_value = SimpleNamespace(targets=(), boundary_reached=True)
+        order = []
+        dispatcher.wait_foreground_idle.side_effect = lambda **kw: order.append("idle") or True
+        nav.finish.side_effect = lambda **kw: order.append("close") or {"status":"complete","errors":[]}
+        command = MainFlowCommand(account_mode="automatic",target_account_name="测试")
+        MainFlowCoordinator(scanner=scanner,dispatcher=dispatcher,navigation_factory=lambda _:nav).run(context,command)
+        scanner.initialize.assert_called_once_with(command,window=nav.open.return_value)
+        self.assertEqual(order,["idle","close"])
+        self.assertEqual(context.state.snapshot()["status"],"completed")
+
+    def test_navigation_error_preserved_separately_from_cleanup_error(self):
+        context = self.context(); nav=self.navigation()
+        nav.open.side_effect=RuntimeError("名称不唯一")
+        nav.finish.return_value={"status":"failed","errors":["无法关闭"]}
+        MainFlowCoordinator(scanner=Mock(),dispatcher=Mock(),navigation_factory=lambda _:nav).run(context,MainFlowCommand())
+        state=context.state.snapshot()
+        self.assertIn("名称不唯一",state['latestError'])
+        self.assertEqual(state['cleanup']['errors'],["无法关闭"])
+
+    def test_cancel_before_start_never_opens_wechat(self):
+        context=self.context();context.cancel_token.set();factory=Mock()
+        MainFlowCoordinator(scanner=Mock(),dispatcher=Mock(),navigation_factory=factory).run(context,MainFlowCommand())
+        factory.assert_not_called()
+        self.assertEqual(context.state.snapshot()['status'],'cancelled')
+
+    def test_confirmed_empty_home_finishes_without_scanning(self):
+        context=self.context();nav=self.navigation();nav.empty_home=True;scanner=Mock()
+        MainFlowCoordinator(scanner=scanner,dispatcher=Mock(),navigation_factory=lambda _:nav).run(context,MainFlowCommand())
+        scanner.initialize.assert_not_called();nav.finish.assert_called_once()
+        self.assertEqual(context.state.snapshot()['progressDone'],0)
