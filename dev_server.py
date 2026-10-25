@@ -2625,6 +2625,9 @@ def _mapping_for_app_config(mapping: dict[str, Any]) -> dict[str, Any]:
 
 
 def _replace_runtime_config(backend: DevBackendContext, config: Any) -> None:
+    main_flow = getattr(backend, "main_flow_service", None)
+    if main_flow is not None:
+        main_flow.configure_for_next_task(config)
     config_service = getattr(backend.runtime, "config_service", None)
     if config_service is not None:
         lock = getattr(config_service, "_lock", None)

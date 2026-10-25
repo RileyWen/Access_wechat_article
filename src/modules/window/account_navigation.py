@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from collections import deque
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 import json
 import os
 from pathlib import Path
@@ -117,6 +117,8 @@ class OwnedPage:
     title: str
     role: str
     tab_runtime_id: list[int]
+    document_runtime_id: list[int] = field(default_factory=list)
+    closed: bool = False
 
 
 class DesktopLease:
@@ -218,6 +220,8 @@ class AccountNavigationSession:
         else:
             tab_id = []
         page = OwnedPage(owner.NativeWindowHandle, owner.ProcessId, psutil.Process(owner.ProcessId).create_time(), title, role, tab_id)
+        if tab:
+            page.document_runtime_id = runtime_id(find_wechat_document_control(control))
         if page not in self.pages:
             self.pages.append(page)
             self._save('navigating')
@@ -254,6 +258,7 @@ class AccountNavigationSession:
         self._recover()
         self.recovered = True
         self.factory.article_opened = self.register_article
+        self.factory.article_closed = self.mark_article_closed
         self.pacer.cancelled = self.cancel_token.is_set
         self.pacer.events.clear()
         self.baseline_handles = {w.handle for w in enumerate_uia_windows()}
@@ -362,7 +367,9 @@ class AccountNavigationSession:
             selected = choose_account(candidates, name)
             return selected
         selected = self._wait(result_probe, '未找到完整名称匹配的公众号；请检查账号名称或微信验证提示', 20)
-        search_page.title = find_wechat_document_control(self.auto.ControlFromHandle(w.handle)).Name
+        search_doc = find_wechat_document_control(self.auto.ControlFromHandle(w.handle))
+        search_page.title = search_doc.Name
+        search_page.document_runtime_id = runtime_id(search_doc)
         self._save('navigating')
         self._click(selected['control'], '选择网络公众号')
 
@@ -409,6 +416,13 @@ class AccountNavigationSession:
         if errors: raise AccountNavigationError('上轮页面待清理：' + '；'.join(errors))
         self.pages.clear()
 
+    def mark_article_closed(self, tab):
+        for page in reversed(self.pages):
+            if page.role == 'article' and page.handle == tab.owner_handle and page.title == tab.title and not page.closed:
+                page.closed = True
+                self._save('collecting')
+                break
+
     def register_article(self, tab):
         owner = self.auto.ControlFromHandle(tab.owner_handle)
         try:
@@ -430,6 +444,7 @@ class AccountNavigationSession:
     def _close_pages(self):
         errors = []
         for page in reversed(self.pages):
+            if page.closed: continue
             try:
                 w = self._matching_window(page)
                 if w is None: continue
@@ -456,37 +471,43 @@ class AccountNavigationSession:
 
     def _close_home(self, window, page):
         self.factory.create_home_guard().activate(window)
-        matches = [c for c in nodes(window.control, depth=18, limit=2000, chrome_only=True) if runtime_id(c) == page.tab_runtime_id]
-        if not matches: return  # Exact registered tab has already gone.
-        row = matches[0]
-        if page.role == 'search':
-            labels = [c.Name for c in row.GetChildren() if c.ControlTypeName == 'TextControl']
-            if len(labels) != 1 or '搜一搜' not in labels[0]:
-                raise AccountNavigationError('搜索标签身份发生变化')
-            page.title = labels[0]
-        doc = find_wechat_document_control(window.control)
-        if doc is None or doc.Name != page.title:
-            if valid_rect(row):
-                self.pacer.run('激活待关闭标签', lambda: row.Click(simulateMove=False), cleanup=True)
-            else:
-                # WeChat 4.1 may expose zero rectangles for every tab. Cycle
-                # keyboard focus, checking document identity after each action.
-                for _ in range(20):
-                    self.pacer.run('切换待关闭标签', lambda: self.auto.SendKeys('{Ctrl}{Tab}'), cleanup=True)
-                    time.sleep(.15)
-                    doc = find_wechat_document_control(window.control)
-                    if doc is not None and doc.Name == page.title: break
-            time.sleep(.2)
+        # WeChat exposes one reused tab row for several tabs. The document ID,
+        # not that row ID, distinguishes the page we own from its neighbours.
+        def identity():
             doc = find_wechat_document_control(window.control)
-        if doc is None or doc.Name != page.title or runtime_id(active_tab_row(window.control, page.title)) != page.tab_runtime_id:
-            raise AccountNavigationError('当前活动标签不是本轮主页，保留页面')
-        self.pacer.run('关闭公众号主页', lambda: _post_ctrl_w(page.handle), cleanup=True)
+            return (tuple(runtime_id(doc)), doc.Name if doc is not None else '')
+        def owned(current):
+            doc_id, title = current
+            if page.role == 'search':
+                return '搜一搜' in title and (not page.document_runtime_id or doc_id == tuple(page.document_runtime_id))
+            return title == page.title and (not page.document_runtime_id or doc_id == tuple(page.document_runtime_id))
+        current = identity()
+        visited = set()
+        same_name = False
+        while not owned(current):
+            same_name = same_name or current[1] == page.title
+            if current in visited:
+                if same_name:
+                    raise AccountNavigationError('同名文档身份不同，保留页面')
+                page.closed = True
+                return
+            if len(visited) >= 20:
+                raise AccountNavigationError('无法在已打开的标签中定位本轮页面')
+            visited.add(current)
+            self.pacer.run('切换待关闭标签', lambda: self.auto.SendKeys('{Ctrl}{Tab}'), cleanup=True)
+            time.sleep(.2)
+            current = identity()
+        before = current
+        self.pacer.run('关闭本轮' + page.role, lambda: _post_ctrl_w(page.handle), cleanup=True)
         deadline = time.monotonic() + 4
         while time.monotonic() < deadline:
-            current = self._matching_window(page)
-            if current is None or not any(runtime_id(c) == page.tab_runtime_id for c in nodes(current.control, depth=18, limit=2000, chrome_only=True)): return
+            current_window = self._matching_window(page)
+            if current_window is None or identity() != before:
+                page.closed = True
+                self._save('cleaning')
+                return
             time.sleep(.1)
-        raise AccountNavigationError('主页标签关闭未确认')
+        raise AccountNavigationError('本轮标签关闭未确认')
 
     @staticmethod
     def _close_window(handle):
@@ -523,4 +544,5 @@ class AccountNavigationSession:
                 if foreground_safe and self.recovered:
                     self.pacer.cancelled = lambda: False
                     self.factory.article_opened = None
+                    self.factory.article_closed = None
                 self.lease.release()

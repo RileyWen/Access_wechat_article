@@ -38,6 +38,7 @@ class WindowRuntimeFactory:
         tab_service_factory: Callable[..., Any] = WechatBrowserTabService,
     ) -> None:
         self.article_opened = None
+        self.article_closed = None
         self._window = config.window
         self.pacer = UiActionPacer(getattr(config.window, "ui_action_interval_seconds", .5))
         self._reader_factory = reader_factory

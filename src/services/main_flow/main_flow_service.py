@@ -73,6 +73,10 @@ class MainFlowService:
         with self._lock:
             return self._active_task_id
 
+    def configure_for_next_task(self, config):
+        with self._lock:
+            self._config = config
+
     def start(self, command: MainFlowCommand) -> MainFlowSnapshot:
         with self._lock:
             if self._active_task_id is not None:

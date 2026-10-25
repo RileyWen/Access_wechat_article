@@ -62,6 +62,14 @@ class ObservedTabService(PacedComponent):
 
     def __getattr__(self, name):
         value = super().__getattr__(name)
+        if name == 'close_article_tab':
+            def close(*args, **kwargs):
+                result = value(*args, **kwargs)
+                callback = self._factory.article_closed
+                if callback is not None:
+                    callback(args[0] if args else kwargs['selected'])
+                return result
+            return close
         if name not in ('wait_for_article_tab', 'wait_for_opened_article_tab'):
             return value
         def call(*args, **kwargs):
