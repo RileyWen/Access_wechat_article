@@ -103,6 +103,7 @@ def active_tab_row(root, title):
             ch.Name in ('关闭', '关闭标签页') and ch.ControlTypeName == 'ButtonControl' for ch in children
         ):
             matches.append(c)
+    if not matches: return None
     if len(matches) != 1:
         raise AccountNavigationError('无法唯一识别当前主页标签，保留页面以免误关')
     return matches[0]
@@ -178,7 +179,13 @@ class AccountNavigationSession:
         while time.monotonic() < deadline:
             if self.cancel_token.is_set():
                 raise UiActionCancelled('导航已取消')
-            result = probe()
+            try:
+                result = probe()
+            except Exception as exc:
+                # Chromium replaces its UIA tree while navigating. Retrying
+                # readonly probes is safe; never automatically replay a click.
+                if type(exc).__name__ != 'COMError': raise
+                result = None
             if result:
                 return result
             self.cancel_token.wait(.2)
@@ -202,7 +209,7 @@ class AccountNavigationSession:
         import psutil
         owner = control
         if tab:
-            row = active_tab_row(control, title)
+            row = self._wait(lambda: active_tab_row(control, title), "未加载可核验的标签栏", 5)
             tab_id = runtime_id(row)
             if not tab_id:
                 raise AccountNavigationError('公众号标签没有可核验的身份')
