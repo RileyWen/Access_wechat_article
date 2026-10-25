@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import datetime
 from threading import Event
 from types import SimpleNamespace
@@ -284,3 +285,82 @@ class NavigationFlowTests(ReaderFixture, unittest.TestCase):
         MainFlowCoordinator(scanner=scanner,dispatcher=Mock(),navigation_factory=lambda _:nav).run(context,MainFlowCommand())
         scanner.initialize.assert_not_called();nav.finish.assert_called_once()
         self.assertEqual(context.state.snapshot()['progressDone'],0)
+
+
+class ArticleScopeLimitTests(ReaderFixture, unittest.TestCase):
+    context = CompletionFlowTests.context
+    target = CompletionFlowTests.target
+
+    def run_scope(self, batches, outcomes, limit=2):
+        context = self.context()
+        context = replace(context, state=MainFlowState(task_id='test', target_count=limit))
+        scanner, dispatcher = Mock(), Mock()
+        scanner.initialize.return_value = SimpleNamespace(account_name='测试')
+        scanner.scan_visible_targets.side_effect = [
+            SimpleNamespace(targets=tuple(self.target(t) for t in titles), boundary_reached=i == len(batches)-1)
+            for i, titles in enumerate(batches)
+        ]
+        scanner.scroll_next.return_value = True
+        seen = []
+
+        def plan(ctx, target, command):
+            seen.append(target.title_raw)
+            return target.fingerprint, None, [] if outcomes[target.title_raw] == 'skip' else ['detail']
+
+        def submit(target, options, ctx):
+            return SimpleNamespace(handle_id=target.fingerprint, target=target, options=SimpleNamespace(target_key=''))
+
+        def receipt(handle, **kwargs):
+            status = outcomes[handle.target.title_raw]
+            return SingleArticleReceipt(
+                task_id=handle.handle_id, target_fingerprint=handle.target.fingerprint,
+                status='success' if status == 'delayed' else status,
+                foreground_done=True, tab_closed=True,
+                article_saved=status == 'success', progress_counted=status == 'success',
+            )
+
+        dispatcher.submit.side_effect = submit
+        dispatcher.wait_foreground_done.side_effect = receipt
+        dispatcher.wait_finished.side_effect = receipt
+        dispatcher.poll_updates.return_value = []
+        with patch('src.services.main_flow.main_flow_coordinator.plan_article', side_effect=plan), patch('src.services.main_flow.main_flow_coordinator.set_attempt'):
+            MainFlowCoordinator(scanner=scanner, dispatcher=dispatcher).run(context, MainFlowCommand(target_count=limit))
+        return seen, context.state.snapshot(), scanner, dispatcher
+
+    def test_latest_two_already_complete_stop_without_scrolling(self):
+        seen, state, scanner, dispatcher = self.run_scope([['a', 'b', 'c']], dict(a='skip', b='skip', c='success'))
+        self.assertEqual(seen, ['a', 'b'])
+        scanner.scroll_next.assert_not_called()
+        dispatcher.submit.assert_not_called()
+        self.assertEqual((state['checkedCount'], state['skippedCount'], state['progressDone'], state['progressPercent']), (2, 2, 0, 100))
+
+    def test_one_skip_and_one_capture_do_not_seek_a_third(self):
+        seen, state, scanner, dispatcher = self.run_scope([['a', 'b', 'c']], dict(a='skip', b='success', c='success'))
+        self.assertEqual(seen, ['a', 'b'])
+        self.assertEqual((state['checkedCount'], state['skippedCount'], state['progressDone']), (2, 1, 1))
+        self.assertEqual(dispatcher.submit.call_count, 1)
+        scanner.scroll_next.assert_not_called()
+
+    def test_failed_articles_still_occupy_slots(self):
+        seen, state, scanner, dispatcher = self.run_scope([['a', 'b', 'c']], dict(a='failed', b='failed', c='success'))
+        self.assertEqual(seen, ['a', 'b'])
+        self.assertEqual((state['checkedCount'], state['errorCount']), (2, 2))
+        scanner.scroll_next.assert_not_called()
+
+    def test_delayed_progress_receipts_cannot_over_dispatch(self):
+        seen, state, scanner, dispatcher = self.run_scope([['a', 'b', 'c']], dict(a='delayed', b='delayed', c='success'))
+        self.assertEqual(seen, ['a', 'b'])
+        self.assertEqual(dispatcher.submit.call_count, 2)
+        scanner.scroll_next.assert_not_called()
+
+    def test_duplicate_cards_across_screens_do_not_consume_extra_slots(self):
+        seen, state, scanner, dispatcher = self.run_scope([['a'], ['a', 'b', 'c']], dict(a='skip', b='skip', c='success'))
+        self.assertEqual(seen, ['a', 'b'])
+        self.assertEqual(scanner.scroll_next.call_count, 1)
+        self.assertEqual(state['checkedCount'], 2)
+
+    def test_zero_limit_still_walks_all_batches(self):
+        seen, state, scanner, dispatcher = self.run_scope([['a'], ['b', 'c']], dict(a='skip', b='skip', c='skip'), limit=0)
+        self.assertEqual(seen, ['a', 'b', 'c'])
+        self.assertEqual(scanner.scroll_next.call_count, 1)
+        self.assertEqual(state['checkedCount'], 3)

@@ -253,8 +253,11 @@ class MainFlowState:
                 else None
             )
             total_label = "全部" if self.target_count == 0 else str(self.target_count)
+            checked_count = len(
+                self._progress_fingerprints | self._skipped_fingerprints | self._error_fingerprints
+            )
             percent = (
-                min(100, round(self._progress_done / self.target_count * 100))
+                min(100, round(checked_count / self.target_count * 100))
                 if self.target_count
                 else 0
             )
@@ -266,6 +269,7 @@ class MainFlowState:
                 "accountName": self._account_name,
                 "taskInfo": self._task_info,
                 "proxyStatusLabel": self._proxy_status_label,
+                "checkedCount": checked_count,
                 "progressDone": self._progress_done,
                 "processedCount": self._progress_done,
                 "detailSuccessCount": self._detail_success_count,

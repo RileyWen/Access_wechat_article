@@ -333,7 +333,7 @@ class MainFlowService:
         if command.archive_offline:
             offline_label = "离线归档 beta" if command.offline_archive_mode == "beta" else "离线归档"
             content.append(offline_label)
-        count_label = "全部符合条件文章" if command.target_count == 0 else f"{command.target_count} 篇"
+        count_label = "全部符合条件文章" if command.target_count == 0 else f"最新 {command.target_count} 篇（含已完整文章）"
         return f"主流程启动：目标 {count_label}，开启{'、'.join(content)}"
 
 

@@ -44,6 +44,8 @@ export type TaskRuntimeState = {
   accountName?: string
   taskInfo?: string
   proxyStatusLabel?: string
+  checkedCount?: number
+  skippedCount?: number
   progressDone?: number
   progressTotalLabel?: string
   progressPercent?: number

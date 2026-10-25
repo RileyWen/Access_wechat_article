@@ -519,7 +519,7 @@ const taskProgressSummary = computed(() => resolveTaskProgressSummary({
   logs: taskLogs.value,
 }))
 const taskProgressLabel = computed(() => (
-  `${runtimeState.value.progressDone ?? taskProgressSummary.value.completedCount}/${runtimeState.value.progressTotalLabel || taskProgressSummary.value.totalLabel}`
+  `${runtimeState.value.checkedCount ?? runtimeState.value.progressDone ?? taskProgressSummary.value.completedCount}/${runtimeState.value.progressTotalLabel || taskProgressSummary.value.totalLabel}`
 ))
 
 const logTabs = [
@@ -588,7 +588,8 @@ const statusItems = computed(() => [
   { label: '任务信息', value: runtimeState.value.taskInfo || '待获取', icon: 'fa-regular fa-file-lines' },
   { label: '页面清理', value: runtimeState.value.cleanup?.errors?.join('；') || ({ complete: '已关闭本轮页面', kept: '按设置保留页面', not_needed: '无需清理', blocked: '等待安全清理', failed: '清理未完成' } as Record<string, string>)[runtimeState.value.cleanup?.status || 'not_needed'], icon: 'fa-solid fa-check' },
   { label: '代理状态', value: runtimeState.value.proxyStatusLabel || '空闲', icon: 'fa-solid fa-network-wired' },
-  { label: '采集进度', value: '', icon: 'fa-solid fa-gauge-high', progress: true },
+  { label: '检查进度', value: '', icon: 'fa-solid fa-gauge-high', progress: true },
+  { label: '已完整跳过', value: String(runtimeState.value.skippedCount ?? 0), icon: 'fa-solid fa-check' },
   { label: '平均时长', value: runtimeState.value.averageArticleDurationLabel || '待统计', icon: 'fa-regular fa-clock' },
   {
     label: '活跃子进程',
@@ -1383,12 +1384,12 @@ onBeforeUnmount(() => {
             </div>
             <div class="account-range-row">
               <ASelect v-model:value="taskDateFilterMode" :options="taskDateFilterOptions" :disabled="taskSettingsLocked" aria-label="日期筛选方式" />
-              <label>篇数 <AInputNumber id="page-count" v-model:value="pageCount" :min="0" :precision="0" :disabled="taskSettingsLocked" aria-label="设定任务" title="0 表示遍历全部" /></label>
+              <label>篇数 <AInputNumber id="page-count" v-model:value="pageCount" :min="0" :precision="0" :disabled="taskSettingsLocked" aria-label="设定任务" title="检查符合日期条件的最新 N 篇，已完整文章也计入；0 表示全部" /></label>
             </div>
             <ARangePicker v-if="taskDateFilterMode === 'range'" v-model:value="taskDateRangeValue" value-format="YYYY-MM-DD" :disabled="taskSettingsLocked" :placeholder="['起始日期', '截止日期']" />
             <ADatePicker v-else-if="taskDateFilterMode === 'before'" v-model:value="taskEndDate" value-format="YYYY-MM-DD" :disabled="taskSettingsLocked" placeholder="选择截止日期" />
             <ADatePicker v-else-if="taskDateFilterMode === 'after'" v-model:value="taskStartDate" value-format="YYYY-MM-DD" :disabled="taskSettingsLocked" placeholder="选择起始日期" />
-            <div v-else class="account-task-hint">{{ automaticAccount ? '自动核验公众号，采集“全部”列表' : '请先手动打开公众号“全部”页' }} · 0 篇表示全部</div>
+            <div v-else class="account-task-hint">检查最新 N 篇（含已完整文章）· 0 篇表示全部</div>
           </article>
 
           <article class="task-card task-card-content panel">
@@ -1530,7 +1531,7 @@ onBeforeUnmount(() => {
                 <template v-else-if="item.progress">
                   <AProgress
                     class="progress-line"
-                    aria-label="采集进度"
+                    aria-label="检查进度"
                     :percent="progressPercent"
                     :stroke-color="progressStrokeColor"
                     :status="progressLineStatus"
@@ -3080,7 +3081,7 @@ input:focus-visible {
 .status-list {
   display: grid;
   align-content: space-between;
-  gap: 12px;
+  gap: 8px;
   min-height: 0;
   margin-top: 18px;
   padding-bottom: 18px;

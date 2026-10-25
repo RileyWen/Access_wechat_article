@@ -126,7 +126,7 @@ class MainFlowCoordinator:
                 state.set_account_name(account_name)
 
             while not context.cancel_token.is_set():
-                if _target_limit_reached(state, command.target_count):
+                if _target_limit_reached(handled_fingerprints, command.target_count):
                     break
                 self._set_action(state, "正在识别文章卡片")
                 batch = self._scanner.scan_visible_targets(session)
@@ -136,7 +136,7 @@ class MainFlowCoordinator:
                         break
                     if target.fingerprint in handled_fingerprints:
                         continue
-                    if _target_limit_reached(state, command.target_count):
+                    if _target_limit_reached(handled_fingerprints, command.target_count):
                         break
                     selected = (
                         selected_match(target, selections) if selections else None
@@ -239,7 +239,7 @@ class MainFlowCoordinator:
                 if (
                     (selections and len(selected_done) == len(selections))
                     or context.cancel_token.is_set()
-                    or _target_limit_reached(state, command.target_count)
+                    or _target_limit_reached(handled_fingerprints, command.target_count)
                 ):
                     break
                 if bool(getattr(batch, "boundary_reached", False)):
@@ -487,11 +487,12 @@ class MainFlowCoordinator:
             return
 
 
-def _target_limit_reached(state: Any, target_count: int) -> bool:
+def _target_limit_reached(selected_fingerprints: set[str], target_count: int) -> bool:
     if int(target_count) <= 0:
         return False
-    snapshot = state.snapshot()
-    return int(snapshot.get("progressDone") or 0) >= int(target_count)
+    # Limit the distinct articles in this run, not successful downloads.
+    # Existing, failed and asynchronously finishing articles still occupy a slot.
+    return len(selected_fingerprints) >= int(target_count)
 
 
 __all__ = ["MainFlowCoordinator"]
