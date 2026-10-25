@@ -167,3 +167,42 @@ class DocumentCleanupTests(unittest.TestCase):
     def test_unowned_identical_name_is_preserved(self):
         with self.assertRaisesRegex(AccountNavigationError,'同名文档'):
             self.run_cleanup([(1,'金渐成')],2)
+
+class NavigationFailureTests(unittest.TestCase):
+    def make_nav(self, cancel):
+        folder=tempfile.TemporaryDirectory();self.addCleanup(folder.cleanup)
+        return AccountNavigationSession(NS(pacer=UiActionPacer()),folder.name,'failure',cancel,Mock())
+
+    def test_missing_login_stops_before_any_click(self):
+        nav=self.make_nav(Event())
+        nav.auto=NS(WindowControl=lambda **kw:NS(Exists=lambda seconds:False))
+        with self.assertRaisesRegex(AccountNavigationError,'微信未登录'):
+            nav._navigate('金渐成')
+        self.assertEqual(list(nav.pacer.events),[])
+
+    def test_condition_wait_times_out_and_obeys_cancel(self):
+        clock=Clock();cancel=NS(is_set=lambda:False,wait=clock.sleep)
+        nav=self.make_nav(cancel)
+        with patch('src.modules.window.account_navigation.time.monotonic',side_effect=clock.time):
+            with self.assertRaisesRegex(AccountNavigationError,'加载超时'):
+                nav._wait(lambda:None,'加载超时',.6)
+        self.assertLess(clock.now,.9)
+        cancel.is_set=lambda:True
+        with self.assertRaises(UiActionCancelled):nav._wait(lambda:self.fail(),'unused')
+
+class ForegroundCancellationTests(unittest.TestCase):
+    def test_cancelled_waiter_cannot_take_proxy_after_idle_check(self):
+        from threading import Lock, Thread
+        from src.services.task.initial_content_storage_huey_service import _ForegroundLease
+        lock=Lock();lock.acquire();cancel=Event();entered=Event();finished=Event();errors=[]
+        def worker():
+            entered.set()
+            try:
+                with _ForegroundLease(lock,cancel.is_set):errors.append('business operation ran')
+            except UiActionCancelled:pass
+            finally:finished.set()
+        thread=Thread(target=worker);thread.start()
+        self.assertTrue(entered.wait(1));cancel.set();lock.release()
+        self.assertTrue(finished.wait(1));thread.join()
+        self.assertEqual(errors,[])
+        self.assertTrue(lock.acquire(timeout=.1));lock.release()

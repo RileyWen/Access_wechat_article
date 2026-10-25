@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from src.modules.window.ui_action_pacer import UiActionCancelled
+
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -56,12 +58,16 @@ class _EmbeddedThreadConsumer(Consumer):
 class _ForegroundLease:
     """保护主页点击和全局代理接管区间的互斥租约。"""
 
-    def __init__(self, lock: Lock) -> None:
+    def __init__(self, lock: Lock, cancelled=lambda: False) -> None:
+        self._cancelled = cancelled
         self._lock = lock
         self._held = False
 
     def __enter__(self) -> "_ForegroundLease":
         self._lock.acquire()
+        if self._cancelled():
+            self._lock.release()
+            raise UiActionCancelled("排队的前台任务已取消")
         self._held = True
         return self
 
@@ -179,8 +185,8 @@ class InitialContentStorageHueyService:
             check_worker_health=False,
         )
 
-    def _foreground_lease(self) -> _ForegroundLease:
-        return _ForegroundLease(self._foreground_lock)
+    def _foreground_lease(self, job_id=None) -> _ForegroundLease:
+        return _ForegroundLease(self._foreground_lock, lambda: bool(job_id and self._is_cancelled(job_id)))
 
     @property
     def queue_database_path(self) -> Path:
@@ -1005,7 +1011,7 @@ class InitialContentStorageHueyService:
                 item["durationSeconds"] = round(max(0.0, duration_seconds), 3)
             items.append(item)
 
-        with self._foreground_lease():
+        with self._foreground_lease(job_id):
             try:
                 publish("正在启动 MITM 捕获...")
                 step_started = time.monotonic()
@@ -1206,7 +1212,7 @@ class InitialContentStorageHueyService:
         tab_closed = False
         capture_started_at = self._now()
         capture_started_monotonic = started_at
-        foreground_lease = self._foreground_lease()
+        foreground_lease = self._foreground_lease(job_id)
         foreground_lease.__enter__()
         foreground_lease_held = True
 
