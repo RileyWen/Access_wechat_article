@@ -62,14 +62,14 @@ def local_account_candidates(popover):
     return result
 
 
-def nodes(root, depth=24, limit=3000):
+def nodes(root, depth=24, limit=3000, *, chrome_only=False):
     queue = deque([(root, 0)])
     count = 0
     while queue and count < limit:
         control, level = queue.popleft()
         count += 1
         yield control
-        if level < depth:
+        if level < depth and not (chrome_only and control.ControlTypeName == 'DocumentControl'):
             try:
                 queue.extend((c, level + 1) for c in control.GetChildren())
             except Exception:
@@ -92,15 +92,15 @@ def valid_rect(control):
 
 
 def active_tab_row(root, title):
-    """Qt/Chromium tabs may be Groups rather than TabItems. Require a visible close button."""
+    """Qt/Chromium tabs may be Groups rather than TabItems. Require an exact title and close control; WeChat can report zero-sized tab rectangles."""
     matches = []
-    for c in nodes(root, depth=17, limit=1800):
+    for c in nodes(root, depth=17, limit=1800, chrome_only=True):
         if c.ControlTypeName == 'DocumentControl':
             continue
         try: children = c.GetChildren()
         except Exception: continue
         if any(ch.Name == title and ch.ControlTypeName == 'TextControl' for ch in children) and any(
-            ch.Name in ('关闭', '关闭标签页') and ch.ControlTypeName == 'ButtonControl' and valid_rect(ch) for ch in children
+            ch.Name in ('关闭', '关闭标签页') and ch.ControlTypeName == 'ButtonControl' for ch in children
         ):
             matches.append(c)
     if len(matches) != 1:
@@ -433,7 +433,7 @@ class AccountNavigationSession:
 
     def _close_home(self, window, page):
         self.factory.create_home_guard().activate(window)
-        matches = [c for c in nodes(window.control, depth=18, limit=2000) if runtime_id(c) == page.tab_runtime_id]
+        matches = [c for c in nodes(window.control, depth=18, limit=2000, chrome_only=True) if runtime_id(c) == page.tab_runtime_id]
         if not matches: return  # Exact registered tab has already gone.
         row = matches[0]
         if page.role == 'search':
@@ -443,8 +443,16 @@ class AccountNavigationSession:
             page.title = labels[0]
         doc = find_wechat_document_control(window.control)
         if doc is None or doc.Name != page.title:
-            if not valid_rect(row): raise AccountNavigationError('目标主页标签当前不可定位')
-            self.pacer.run('激活待关闭主页', lambda: row.Click(simulateMove=False), cleanup=True)
+            if valid_rect(row):
+                self.pacer.run('激活待关闭标签', lambda: row.Click(simulateMove=False), cleanup=True)
+            else:
+                # WeChat 4.1 may expose zero rectangles for every tab. Cycle
+                # keyboard focus, checking document identity after each action.
+                for _ in range(20):
+                    self.pacer.run('切换待关闭标签', lambda: self.auto.SendKeys('{Ctrl}{Tab}'), cleanup=True)
+                    time.sleep(.15)
+                    doc = find_wechat_document_control(window.control)
+                    if doc is not None and doc.Name == page.title: break
             time.sleep(.2)
             doc = find_wechat_document_control(window.control)
         if doc is None or doc.Name != page.title or runtime_id(active_tab_row(window.control, page.title)) != page.tab_runtime_id:
@@ -453,7 +461,7 @@ class AccountNavigationSession:
         deadline = time.monotonic() + 4
         while time.monotonic() < deadline:
             current = self._matching_window(page)
-            if current is None or not any(runtime_id(c) == page.tab_runtime_id for c in nodes(current.control, depth=18, limit=2000)): return
+            if current is None or not any(runtime_id(c) == page.tab_runtime_id for c in nodes(current.control, depth=18, limit=2000, chrome_only=True)): return
             time.sleep(.1)
         raise AccountNavigationError('主页标签关闭未确认')
 
